@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = [".", "crates/nooterra-wasm"]
+
+[package]
+name = "nooterra-kernel"
+version = "0.3.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/nooterra/nooterra-kernel"
+homepage = "https://nooterra.ai"
+description = "Zero-trust no_std proof kernel for Nooterra 3D continuum multiphysics, geometry, DFM/DFA, tolerance, and COTS assembly certificates (.ntcert)"
+
+# Trusted Computing Base: zero external dependencies, ever.
+[dependencies]
+
+# Integer overflow must never silently wrap inside the verification kernel.
+[profile.release]
+overflow-checks = true
+lto = true
+codegen-units = 1
+opt-level = 3
