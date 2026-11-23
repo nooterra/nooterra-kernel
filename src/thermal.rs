@@ -1,19 +1,14 @@
-//! Zero-Trust 3D Heterogeneous Conjugate Heat Transfer (`M3`) Proof Checker
-//! (`#![no_std]`, `#![forbid(unsafe_code)]`, 100% PURE EXACT INTEGER ARITHMETIC — ZERO FLOATS!).
+//! Pure-integer 3D heterogeneous conjugate heat transfer (`M3`) certificate verifier.
 //!
 //! Uses conforming 3D Raviart-Thomas (`RT_0`) heat flux fields `q = (qx, qy, qz) in H(div; Omega)`
-//! on structured heterogeneous 3D hexahedral grids `(nx, ny, nz)` to prove zero-discretization-error
-//! continuum upper bounds on thermal compliance, winding average temperature rise, and two-sided
-//! goal-oriented hot-spot cell temperature brackets!
-//!
-//! Supports:
-//! - Arbitrary per-cell heterogeneous thermal conductivity `k_e > 0` (e.g. 200:1 Cu/Al/insulation)
-//!   with polytopic uncertainty corners `k_e in [k_min, k_max]`.
-//! - Arbitrary per-cell volumetric heat generation `Q_e` (coupled to Joule losses `|J|^2 / sigma`).
-//! - Exact isothermal Dirichlet (`T = T_D`), Neumann (`q . n = q_N`), and Robin convective
-//!   cooling jacket (`q . n = h_conv * (T - T_inf)`) boundary conditions with uncertain `h_conv`!
-//! - Exact Q1 primal temperature lower-bound verifier (`verify_thermal_primal_q1`) for rigorous
-//!   two-sided continuum hot-spot temperature certification via the exact Parallelogram Law!
+//! on structured hexahedral grids `(nx, ny, nz)` to certify continuum upper bounds on thermal
+//! compliance, winding average temperature rise, and two-sided hot-spot temperature brackets:
+//! - Per-cell heterogeneous thermal conductivity `k_e > 0` across polytopic uncertainty corners.
+//! - Per-cell volumetric heat generation `Q_e` (coupled to Joule loss `|J|^2 / sigma`).
+//! - Isothermal Dirichlet (`T = T_D`), Neumann (`q . n = q_N`), and Robin convective boundary
+//!   conditions (`q . n = h_conv * (T - T_inf)`) with uncertain film coefficient `h_conv`.
+//! - Q1 primal temperature lower-bound verifier (`verify_thermal_primal_q1`) for two-sided
+//!   continuum hot-spot temperature brackets via the parallelogram law.
 
 use alloc::vec::Vec;
 
@@ -132,7 +127,7 @@ pub struct ThermalDualCert3D {
 }
 
 /// Exact-integer 3D Q1 nodal temperature witness (`T = t_nodes[nid] / temp_den`) for certifying
-/// exact continuum LOWER bounds `-2 * Pi(T) <= C_th_exact` inside `nooterra-kernel`!
+/// continuum lower bounds `-2 * Pi(T) <= C_th_exact`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThermalPrimalWitness3D {
     pub temp_den: u64,
@@ -158,7 +153,7 @@ pub struct ThermalDualReport {
     pub num_cells: usize,
     pub total_heat_power: BigRat,
     /// Exact rational upper bound `C_upper(mc) = int |q|^2/k + int_R (q.n)^2/h + 2 int_D (q.n) T_D + 2 int_R (q.n) T_inf`
-    /// for EVERY uncertainty corner `mc`!
+    /// per uncertainty corner `mc`.
     pub compliance_upper_per_corner: Vec<BigRat>,
     pub worst_compliance_upper: BigRat,
     /// Exact rational power-weighted average temperature rise upper bound `worst_C / total_heat_power`
@@ -247,8 +242,7 @@ fn sq_u128_big(v: i128) -> BigUint {
 
 #[inline]
 fn rt0_axis_energy_int(q0: i128, q1: i128) -> BigUint {
-    // q0^2 + q0*q1 + q1^2 >= 0 ALWAYS (equals (q0 + q1/2)^2 + 3/4 q1^2 >= 0)!
-    // Compute in exact BigInt to be 100% overflow-proof for any i64 inputs!
+    // q0^2 + q0*q1 + q1^2 = (q0 + q1/2)^2 + 3/4 q1^2 >= 0; computed in BigInt to avoid i128 overflow.
     let b0 = BigInt::from_i128(q0);
     let b1 = BigInt::from_i128(q1);
     let t = b0.mul(&b0).add(&b0.mul(&b1)).add(&b1.mul(&b1));
@@ -256,11 +250,11 @@ fn rt0_axis_energy_int(q0: i128, q1: i128) -> BigUint {
     t.mag
 }
 
-/// Exact rational 3D GD&T dimensional tolerance scale box (`M6-GD&T`).
-/// Physical cell dimensions scale as `(alpha_x * dx, alpha_y * dy, alpha_z * dz)` for ANY
+/// Exact rational 3D GD&T dimensional tolerance scale box.
+/// Cell dimensions scale as `(alpha_x * dx, alpha_y * dy, alpha_z * dz)` for any
 /// `(alpha_x, alpha_y, alpha_z)` in `[ax_min/D, ax_max/D] x [ay_min/D, ay_max/D] x [az_min/D, az_max/D]`.
-/// By exact Piola / Nédélec pullback and coordinate-wise convexity, the worst-case continuum energy
-/// over the ENTIRE continuous 3D GD&T box is attained exactly at one of the 8 vertices!
+/// By Piola/Nedelec pullback and coordinate-wise convexity, the worst-case continuum energy over
+/// the continuous box is attained at one of the 8 vertices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GdtScaleBox3D {
     pub scale_den: u64,
@@ -340,16 +334,15 @@ impl GdtScaleBox3D {
     }
 }
 
-/// Zero-Trust Pure-Integer 3D Conjugate Heat Transfer (`RT_0`) Dual Verifier!
-/// Independently verifies exact `div(q) === Q_e` in every cell, exact Neumann heat fluxes,
-/// and exact closed-form rational complementary thermal energy across EVERY uncertainty corner!
+/// Pure-integer 3D conjugate heat transfer (`RT_0`) dual verifier.
+/// Checks `div(q) == Q_e` in every cell, Neumann heat fluxes, and closed-form rational
+/// complementary thermal energy across all uncertainty corners.
 pub fn verify_thermal_dual_cert(cert: &ThermalDualCert3D) -> Result<ThermalDualReport, ThermalRejection> {
     verify_thermal_dual_cert_core(cert, None)
 }
 
-/// Zero-Trust Pure-Integer 3D `RT_0` Dual Thermal CHT Verifier OVER A CONTINUOUS 3D GD&T TOLERANCE BOX!
-/// Uses exact contravariant Piola pullback and coordinate-wise convexity across all 8 box corners
-/// to certify every physical manufactured part inside `gdt_box` with ZERO discretization or linearization error!
+/// Pure-integer 3D `RT_0` dual thermal verifier over a continuous 3D GD&T tolerance box using
+/// contravariant Piola pullback and 8-corner coordinate-wise convexity.
 pub fn verify_thermal_dual_cert_gdt(
     cert: &ThermalDualCert3D,
     gdt_box: &GdtScaleBox3D,
@@ -378,7 +371,6 @@ fn verify_thermal_dual_cert_core(
         return Err(ThermalRejection::WitnessSizeMismatch);
     }
 
-    // 1. Check exact Neumann boundary fluxes and accumulate boundary face sums for Robin & Dirichlet!
     let mut robin_sq: [BigUint; 6] = core::array::from_fn(|_| BigUint::zero());
     let mut side_sum_qn: [BigInt; 6] = core::array::from_fn(|_| BigInt::zero()); // sum of signed outward q . n (in flux_den units)
 
@@ -452,10 +444,8 @@ fn verify_thermal_dual_cert_core(
         }
     }
 
-    // 2. Exact pointwise divergence check div(q) === Q_e on EVERY cell AND exact RT_0 energy sum!
-    //    Check: (qx1 - qx0)/dx + (qy1 - qy0)/dy + (qz1 - qz0)/dz == Q_e
-    //    With dx = dx_num / g, q = q_int / flux_den, Q_e = q_src_num / q_src_den:
-    //    g * q_src_den * [dyz*(qx1-qx0) + dxz*(qy1-qy0) + dxy*(qz1-qz0)] == dxyz * flux_den * q_src_num!
+    // Pointwise flux conservation div(q) == Q_e scaled to integers:
+    //   g * q_src_den * [dyz*(qx1-qx0) + dxz*(qy1-qy0) + dxy*(qz1-qz0)] == dxyz * flux_den * q_src_num.
     let dx = BigInt::from_i128(s.dx_num as i128);
     let dy = BigInt::from_i128(s.dy_num as i128);
     let dz = BigInt::from_i128(s.dz_num as i128);
@@ -494,7 +484,6 @@ fn verify_thermal_dual_cert_core(
 
                 sum_q_src = sum_q_src.add(&BigInt::from_i128(s.q_src_num[cid] as i128));
 
-                // Exact Simpson integral numerators separated by axis for exact Piola GD&T scaling!
                 cell_e_axes.push([
                     rt0_axis_energy_int(qx0, qx1),
                     rt0_axis_energy_int(qy0, qy1),
@@ -504,7 +493,6 @@ fn verify_thermal_dual_cert_core(
         }
     }
 
-    // 3. Evaluate exact rational dual compliance upper bound across EVERY uncertainty corner!
     let gd = BigUint::from_u64(s.grid_den);
     let gd2 = gd.mul_u(&gd);
     let gd3 = gd2.mul_u(&gd);
@@ -549,7 +537,6 @@ fn verify_thermal_dual_cert_core(
     let mut worst = BigRat::zero();
 
     for (ci, mc) in s.material_corners.iter().enumerate() {
-        // Group cells by distinct k_num value per axis to keep BigRat additions super fast (~4 material groups!)
         let mut distinct_k: Vec<(i64, [BigUint; 3])> = Vec::new();
         for cid in 0..n_cells {
             let kn = mc.k_num[cid];
@@ -593,7 +580,6 @@ fn verify_thermal_dual_cert_core(
         }
 
         let c_val = if let Some(gdt) = gdt_box {
-            // Exact global maximum over continuous 3D GD&T box via coordinate-wise convexity at all 8 corners!
             let d = gdt.scale_den as u128;
             let d2 = BigInt::from_i128((d * d) as i128);
             let mut best_corner: Option<BigRat> = None;
@@ -656,10 +642,10 @@ fn verify_thermal_dual_cert_core(
     })
 }
 
-/// Zero-Trust Pure-Integer 3D Q1 Primal Temperature Verifier!
-/// Independently checks exact Dirichlet BCs and computes the exact rational continuum lower bound
+/// Pure-integer 3D Q1 primal temperature verifier.
+/// Checks Dirichlet BCs and evaluates the exact rational continuum lower bound
 /// `-2 * Pi(T) = 2 * int Q T - 2 * int_N q_N T - int k |grad T|^2 - int_R h (T - T_inf)^2 <= C_exact`
-/// using exact closed-form Q1 trilinear polynomial integrals (ZERO Gauss quadrature, ZERO floats!).
+/// via closed-form Q1 trilinear polynomial integrals.
 pub fn verify_thermal_primal_q1(
     spec: &ThermalSpec3D,
     witness: &ThermalPrimalWitness3D,
@@ -716,17 +702,8 @@ pub fn verify_thermal_primal_q1(
         }
     }
 
-    // 2. Exact closed-form Q1 gradient stiffness sum per cell!
-    //    For a cube of size (dx, dy, dz) with 8 nodal values t[0..8]:
-    //      int_cell (dT/dx)^2 dV = (dy*dz / (36 * dx)) * sum_{a,b} (sax*sbx) * (3 + say*sby) * (3 + saz*sbz) * t[a] * t[b] / 4?
-    //    Wait: check exact factor from `buckling.rs`:
-    //      D_xx(a, b) = (dy*dz / (144 * dx)) * sax * sbx * (3 + say*sby) * (3 + saz*sbz)!
-    //      Check for unit cube t = x (t[a] = 0 for a<4, 1 for a>=4): dT/dx = 1 => int = 1.
-    //      Let's compute via the 4 edge differences along x:
-    //        dt_x(00) = t(1,0,0)-t(0,0,0), dt_x(10) = t(1,1,0)-t(0,1,0), dt_x(01) = t(1,0,1)-t(0,0,1), dt_x(11) = t(1,1,1)-t(0,1,1).
-    //        Then dT/dx = (1/dx) * bilinear(dt_x) on [-1,1]^2!
-    //        So int_cell (dT/dx)^2 dV = (dx*dy*dz / dx^2) * (1/144) * (9 c0^2 + 3 c1^2 + 3 c2^2 + c3^2)!!
-    //    Check for dt_x = (1,1,1,1): c0 = 4, c1=c2=c3=0 => (1/144) * 9 * 16 = 144/144 = 1! 100% EXACT!
+    // Closed-form Q1 gradient integral via the four edge differences along each axis:
+    //   int_cell (dT/dx)^2 dV = (dy*dz / (144 * dx)) * (9 c0^2 + 3 c1^2 + 3 c2^2 + c3^2).
     let dx = spec.dx_num as i128;
     let dy = spec.dy_num as i128;
     let dz = spec.dz_num as i128;
@@ -858,7 +835,6 @@ pub fn verify_thermal_primal_q1(
         }
     }
 
-    // Evaluate exact -2*Pi(T) for each material corner!
     let grad_common_den = BigUint::from_u128(144u128 * (dxyz as u128))
         .mul_u(&gd)
         .mul_u(&td2);
@@ -891,16 +867,14 @@ pub fn verify_thermal_primal_q1(
     })
 }
 
-/// Zero-Trust Exact Two-Sided Continuum Hot-Spot Temperature Bracket via the Exact Parallelogram Law!
+/// Two-sided continuum hot-spot temperature bracket via the parallelogram law.
 ///
-/// For homogeneous BCs (`T_D = T_inf = 0`, `q_N = 0`) and a target hot-spot cell `(hi, hj, hk)`:
-/// Let `Q_adj = (1 / V_cell) * 1_{hot}` and scale `alpha = alpha_num / alpha_den > 0`.
-/// By exact bilinear symmetry of the 3D CHT PDE:
+/// For homogeneous BCs (`T_D = T_inf = 0`, `q_N = 0`) and target cell `(hi, hj, hk)`, let
+/// `Q_adj = (1 / V_cell) * 1_{hot}` and `alpha = alpha_num / alpha_den > 0`. By bilinear
+/// symmetry of the 3D CHT PDE:
 ///   `T_hot_avg = (1 / (4 * alpha)) * [ C(Q + alpha * Q_adj) - C(Q - alpha * Q_adj) ]`.
-/// Independently verifies:
-///   - `dual_plus` (`C_upper(Q + alpha Q_adj)`) and `primal_minus` (`C_lower(Q - alpha Q_adj)`) -> exact UPPER bound!
-///   - `primal_plus` (`C_lower(Q + alpha Q_adj)`) and `dual_minus` (`C_upper(Q - alpha Q_adj)`) -> exact LOWER bound!
-/// Evaluates at material corner `corner_idx` (zero discretization error, zero floats!).
+/// Combines `dual_plus` with `primal_minus` for the upper bound and `primal_plus` with
+/// `dual_minus` for the lower bound at `corner_idx`.
 #[allow(clippy::too_many_arguments)]
 pub fn verify_hotspot_temp_bracket(
     base_spec: &ThermalSpec3D,
@@ -933,7 +907,7 @@ pub fn verify_hotspot_temp_bracket(
         }
     }
 
-    // Verify dual_plus.spec and dual_minus.spec match base_spec identically EXCEPT Q_hot +- alpha/V_cell!
+    // Require dual_plus.spec and dual_minus.spec to match base_spec except Q_hot +- alpha / V_cell.
     let gd = BigUint::from_u64(base_spec.grid_den);
     let vol_cell = BigRat::new(
         BigInt::from_i128((base_spec.dx_num as i128) * (base_spec.dy_num as i128) * (base_spec.dz_num as i128)),

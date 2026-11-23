@@ -1,20 +1,15 @@
-//! Locking-Free 3D Conforming Hu-Man-Zhang (`HMZ1`) $H(\mathrm{div}; \mathbb{S})$ Proof Checker
-//! (`no_std`, `#![forbid(unsafe_code)]`, 100% PURE EXACT INTEGER ARITHMETIC — ZERO FLOATS!).
+//! Locking-free 3D conforming Hu-Man-Zhang (`HMZ1`) `H(div; S)` stress certificate verifier.
 //!
-//! Eliminates 3D P1 tetrahedral symmetric-stress locking by representing symmetric stress fields
-//! on structured 3D hexahedral grids `(nx, ny, nz)` with:
-//!   - Normal stresses `fx` (`sigma_xx`), `fy` (`sigma_yy`), `fz` (`sigma_zz`) stored on axis faces
-//!     (quadratic along their axis with exact equilibrium bubbles `q_x, q_y, q_z`),
-//!   - Shear stresses `ex` (`sigma_yz`), `ey` (`sigma_xz`), `ez` (`sigma_xy`) stored on grid edges
+//! Represents symmetric stress fields on structured 3D hexahedral grids `(nx, ny, nz)`:
+//!   - Normal stresses `fx` (`sigma_xx`), `fy` (`sigma_yy`), `fz` (`sigma_zz`) on axis faces
+//!     (quadratic along each axis with equilibrium bubbles `q_x, q_y, q_z`).
+//!   - Shear stresses `ex` (`sigma_yz`), `ey` (`sigma_xz`), `ez` (`sigma_xy`) on grid edges
 //!     (bilinear across the two orthogonal axes).
 //!
-//! Independently verifies:
-//!   1. Exact pointwise equilibrium `div(sigma) === 0` at EVERY point of EVERY 3D cell (`0/1` exact).
-//!   2. Exact rational Neumann boundary tractions on all classified Neumann faces and edges.
-//!   3. Exact closed-form Legendre orthogonal rational integral `C(E) = int_Omega sigma : C(E)^-1 : sigma dV`
-//!      across EVERY corner of the polytopic material uncertainty box `E in [E_min, E_max]`
-//!      with ZERO quadrature error and ZERO floating-point rounding!
-//!   4. Exact 1-to-1 compositional interface contract matching across subdomains (`verify_composed_hmz`).
+//! Independently verifies pointwise equilibrium `div(sigma) == 0`, rational Neumann tractions,
+//! 3D circular Coulomb friction cones, pointwise Bernstein von Mises yield, closed-form Legendre
+//! complementary energy `C(E) = int_Omega sigma : C(E)^-1 : sigma dV` across polytopic material
+//! corners, and subdomain interface traction matching (`verify_composed_hmz_x`).
 
 use alloc::vec::Vec;
 
@@ -42,7 +37,7 @@ pub struct HmzSpec3D {
     pub material_corners: Vec<MaterialCorner>,
     pub face_kinds: [BoundaryFaceKind; 6],
     /// Optional exact rational von Mises yield strength `sigma_Y = num / den` (`num > 0, den > 0`).
-    /// When `Some`, every point of every 3D cube is certified to satisfy `sigma_vM(x) <= sigma_Y`!
+    /// When `Some`, every point in every 3D cell must satisfy `sigma_vM(x) <= sigma_Y`.
     pub yield_limit: Option<(i64, u64)>,
 }
 
@@ -150,13 +145,12 @@ pub struct HmzProofReport {
     pub spec_hash: [u8; 32],
     pub num_cells: usize,
     pub num_mat_corners: usize,
-    /// Exact rational compliance upper bound `C_upper(mc)` (including any contact gap work `2 int p_n g_0`)
-    /// for EVERY material corner `mc`.
+    /// Exact rational compliance upper bound `C_upper(mc)` (including contact gap work) per corner.
     pub compliance_per_corner: Vec<BigRat>,
-    /// Worst-case exact rational compliance upper bound across the entire uncertainty polytope!
+    /// Worst-case exact rational compliance upper bound across the uncertainty polytope.
     pub worst_compliance_upper: BigRat,
-    /// Exact rational global upper bound on pointwise squared von Mises stress `max_{x in Omega} sigma_vM(x)^2`
-    /// (zero quadrature error via 3-point Bernstein normal intervals + 8-corner exact BigInt check!).
+    /// Pointwise upper bound on squared von Mises stress `max_{x in Omega} sigma_vM(x)^2`
+    /// via 3-point Bernstein normal intervals and 8-corner exact integer evaluation.
     pub max_von_mises_sq: BigRat,
     /// Exact rational contact gap work `2 int_{Gamma_C} p_n g_0 dA` (`0` if `g_0 = 0` or no contact).
     pub contact_gap_compliance: BigRat,
@@ -205,8 +199,7 @@ fn check_exact_bc(stress_int: i64, flux_den: u64, sgn: i128, t_num: i64, t_den: 
     lhs == rhs
 }
 
-/// Zero-trust pure-exact-integer verifier for a 3D HMZ1 certificate.
-/// Zero floating-point operations anywhere!
+/// Pure-integer verifier for a 3D `HMZ1` stress certificate.
 pub fn verify_hmz_cert(cert: &HmzCert3D) -> Result<HmzProofReport, HmzRejection> {
     let s = &cert.spec;
     let w = &cert.witness;
@@ -240,7 +233,6 @@ pub fn verify_hmz_cert(cert: &HmzCert3D) -> Result<HmzProofReport, HmzRejection>
         return Err(HmzRejection::WitnessSizeMismatch);
     }
 
-    // 1. Exact rational Neumann AND 3D unilateral circular-friction Contact checks on all 6 sides!
     let mut contact_gap_compliance = BigRat::zero();
     let mut contact_faces_verified = 0usize;
     let gd_u = BigUint::from_u64(s.grid_den);
@@ -283,11 +275,9 @@ pub fn verify_hmz_cert(cert: &HmzCert3D) -> Result<HmzProofReport, HmzRejection>
                 if mu_num < 0 || mu_den == 0 || gap_den == 0 {
                     return Err(HmzRejection::InvalidContactParams);
                 }
-                // On BOTH x_min (n=-x, sigma_n = sigma_xx) and x_max (n=+x, sigma_n = sigma_xx),
-                // compressive contact pressure is p_n = -sigma_xx = -fx >= 0!
-                // On each 2D contact square (j, k), sigma_xy is linear in eta (ez0..ez1) and
-                // sigma_xz is linear in zeta (ey0..ey1), so the exact continuous maximum of
-                // sigma_xy^2 + sigma_xz^2 over the square is max(ez0^2, ez1^2) + max(ey0^2, ey1^2)!
+                // Compressive pressure on x_min and x_max is p_n = -sigma_xx = -fx >= 0.
+                // Since sigma_xy is linear in eta and sigma_xz is linear in zeta on each square,
+                // max(sigma_xy^2 + sigma_xz^2) equals max(ez0^2, ez1^2) + max(ey0^2, ey1^2).
                 let mu_num_u = BigUint::from_u64(mu_num as u64);
                 let mu_num2 = mu_num_u.mul_u(&mu_num_u);
                 let mu_den_u = BigUint::from_u64(mu_den);
@@ -411,8 +401,6 @@ pub fn verify_hmz_cert(cert: &HmzCert3D) -> Result<HmzProofReport, HmzRejection>
         }
     }
 
-    // 2. Exact pointwise equilibrium check (div(sigma) === 0 everywhere inside every cube!)
-    //    AND exact integer accumulation of the 4 orthogonal Legendre quadratic energy sums!
     let dx = s.dx_num as i128;
     let dy = s.dy_num as i128;
     let dz = s.dz_num as i128;
@@ -421,14 +409,8 @@ pub fn verify_hmz_cert(cert: &HmzCert3D) -> Result<HmzProofReport, HmzRejection>
     let dyz = dy * dz;
     let dxyz = dxy * dz;
 
-    // All normal-stress orthogonal modes are scaled by `L = 24 * dxyz`:
-    //   m_a * L = 12 * dxyz * (F_L + F_R)
-    //   d_a * L = 12 * dxyz * (F_R - F_L)
-    //   q_a * L = -3 * d_a * (d_a * d_c * twist_b + d_a * d_b * twist_c)
-    //   (2/3) * q_a * L = -2 * d_a * (d_a * d_c * twist_b + d_a * d_b * twist_c)
-    //   sbar_a * L = m_a * L - (2/3) * q_a * L
-    // Shear orthogonal modes are scaled by `4` (and multiplied by `6 * dxyz` to share `L = 24 * dxyz`!):
-    //   Actually keep shear scaled by `4` separately so squares are smaller and exact!
+    // Normal-stress orthogonal modes are scaled by L = 24 * dxyz; shear modes are scaled by 4
+    // separately to keep intermediate squares smaller.
     let mut sum_sbar_sq = BigUint::zero();    // sum_cell (sbar_x^2 + sbar_y^2 + sbar_z^2) * L^2
     let mut sum_sbar_tr_sq = BigUint::zero(); // sum_cell (sbar_x + sbar_y + sbar_z)^2 * L^2
     let mut sum_var_sq = BigUint::zero();     // sum_cell [15*(dx^2+dy^2+dz^2) + 4*(qx^2+qy^2+qz^2)] * L^2  (divide by 45!)
@@ -539,8 +521,7 @@ pub fn verify_hmz_cert(cert: &HmzCert3D) -> Result<HmzProofReport, HmzRejection>
                 let dy_l = 12 * dxyz * (fy1 - fy0);
                 let dz_l = 12 * dxyz * (fz1 - fz0);
 
-                // Exact pointwise 3D von Mises upper bound via 3-point Bernstein normal intervals
-                // sigma_aa(xi) in [min(f0*L, m*L - 2*q*L, f1*L), max(...)] + 8-corner convex max!
+                // Pointwise 3D von Mises upper bound via 3-point Bernstein normal intervals and 8-corner max.
                 let sx_b1 = 12 * dxyz * (fx0 + fx1) - 2 * qx_l;
                 let sy_b1 = 12 * dxyz * (fy0 + fy1) - 2 * qy_l;
                 let sz_b1 = 12 * dxyz * (fz0 + fz1) - 2 * qz_l;
@@ -640,14 +621,7 @@ pub fn verify_hmz_cert(cert: &HmzCert3D) -> Result<HmzProofReport, HmzRejection>
         }
     }
 
-    // 3. Evaluate EXACT rational compliance upper bound at EVERY material uncertainty corner!
-    //    Cell volume = dxyz / grid_den^3.
-    //    Flux scale squared = flux_den^2.
-    //    Normal scale L^2 = (24 * dxyz)^2.
-    //    For each corner (mu = mu_num/mat_den, lam = lam_num/mat_den):
-    //      a_c = 1/(2*mu) = mat_den / (2 * mu_num)
-    //      c_c = lam / (2*mu + 3*lam) = lam_num / (2*mu_num + 3*lam_num)
-    //      1 - c_c = (2*mu_num + 2*lam_num) / (2*mu_num + 3*lam_num)
+    // Exact rational compliance upper bound at each material uncertainty corner.
     let vol_cell = BigRat::new(BigInt::from_i128(dxyz), gd2_u.mul_u(&gd_u));
 
     let r_sbar_sq = BigRat::new(BigInt { neg: false, mag: sum_sbar_sq }, l2.mul_u(&fd2));
@@ -700,10 +674,8 @@ pub fn verify_hmz_cert(cert: &HmzCert3D) -> Result<HmzProofReport, HmzRejection>
     })
 }
 
-/// Compositional Zero-Trust Verifier for two 3D HMZ1 subdomains joined along an x-plane
-/// (`A`'s `x_max` side 1 paired with `B`'s `x_min` side 0).
-/// Independently verifies BOTH subdomains AND checks exact rational 1-to-1 matching of ALL
-/// `(fx, ey, ez)` normal & shear interface tractions!
+/// Verifies two 3D `HMZ1` subdomains joined along an x-plane (`A` side 1 paired with `B` side 0),
+/// checking exact rational equality of all `(fx, ey, ez)` interface tractions.
 pub fn verify_composed_hmz_x(
     cert_a: &HmzCert3D,
     cert_b: &HmzCert3D,

@@ -1,8 +1,5 @@
-//! Zero-Trust Pure-Integer Geometry, DFM, Assembly Kinematics & GD&T Tolerance Kernel
-//! (`G1` Curved B-Rep Sandwiching + `G3` DFM / Coolant Powder-Escape / Collision-Free DFA +
-//! `G4` 3D SDT Tolerance Stackup).
-//!
-//! 100% `#![no_std]`, `#![forbid(unsafe_code)]`, ZERO floats, ZERO external dependencies!
+//! Pure-integer geometry, additive DFM, rigid-body assembly kinematics, and 3D SDT tolerance
+//! verification (`G1`, `G3`, `G4`).
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -36,8 +33,6 @@ pub enum GeometryRejection {
     AirgapRubRisk { min_airgap_num: i64, required_min_num: i64 },
 }
 
-// ========================== 1. G1: CURVED B-REP GEOMETRIC SANDWICHING ==========================
-
 /// Exact rational circular bolt hole `(cx, cy, radius)` divided by `CurvedAnnulusSpec::r_den`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BoltHole2D {
@@ -46,7 +41,7 @@ pub struct BoltHole2D {
     pub radius_num: i64,
 }
 
-/// Exact rational hollow cylinder (annulus) with optional circular ISO bolt-circle holes!
+/// Exact rational hollow cylinder (annulus) with optional circular ISO bolt-circle holes.
 /// Coordinates are in physical length units:
 ///   - Cell `(i, j, k)` spans `[i*dx, (i+1)*dx] x [j*dy, (j+1)*dy] x [k*dz, (k+1)*dz]` (`/ grid_den`).
 ///   - Cylinder axis is `(center_x_num, center_y_num) / r_den`, inner/outer radii `(r_in_num, r_out_num) / r_den`,
@@ -140,9 +135,8 @@ fn cell_dist_sq_bounds(x0: i128, x1: i128, y0: i128, y1: i128, cx: i128, cy: i12
     (dx_min * dx_min + dy_min * dy_min, dx_max * dx_max + dy_max * dy_max)
 }
 
-/// Zero-Trust Pure-Integer Curved-Cylinder + Bolt-Hole Geometric Sandwich Verifier (`G1`)!
-/// Proves mathematically (ZERO floats, ZERO chordal approximation error):
-///   `Omega_in  <=  Omega_exact_curved_BRep  <=  Omega_out`!
+/// Verifies exact integer inclusion `Omega_in <= Omega_exact <= Omega_out` for a hollow cylinder
+/// with optional circular bolt holes (`G1`).
 pub fn verify_curved_annulus_sandwich(
     spec: &CurvedAnnulusSpec,
     witness: &CurvedSandwichWitness,
@@ -168,7 +162,7 @@ pub fn verify_curved_annulus_sandwich(
         return Err(GeometryRejection::MaskSizeMismatch);
     }
 
-    // Scale everything to common integer coordinate grid `common_den = grid_den * r_den`!
+    // Common integer coordinate scale: common_den = grid_den * r_den.
     let gd = spec.grid_den as i128;
     let rd = spec.r_den as i128;
     let dx = (spec.dx_num as i128) * rd;
@@ -228,14 +222,12 @@ pub fn verify_curved_annulus_sandwich(
                     return Err(GeometryRejection::InnerNotSubsetOfOuter { i, j, k });
                 }
 
-                // Exact condition: cell strictly inside curved solid Omega_exact
                 let cell_strictly_inside = z0 >= z_min
                     && z1 <= z_max
                     && r_min_sq >= r_in_sq
                     && r_max_sq <= r_out_sq
                     && strictly_outside_all_holes;
 
-                // Exact condition: cell strictly outside curved solid Omega_exact (interior disjoint!)
                 let cell_strictly_outside = z1 <= z_min
                     || z0 >= z_max
                     || r_max_sq <= r_in_sq
@@ -282,8 +274,6 @@ pub fn verify_curved_annulus_sandwich(
     })
 }
 
-// ========================== 2. G3: DFM, OVERHANG & COOLANT POWDER-ESCAPE BFS ==========================
-
 pub const VOXEL_AIR: u8 = 0;
 pub const VOXEL_SOLID: u8 = 1;
 pub const VOXEL_COOLANT: u8 = 2;
@@ -328,7 +318,8 @@ pub struct DfmReport {
     pub min_observed_wall_cells: usize,
 }
 
-/// Zero-Trust Pure-Integer DFM + LPBF 45-deg Overhang + Coolant Powder-Escape BFS Verifier (`G3`)!
+/// Verifies minimum wall thickness, 45-degree LPBF self-support overhang, and BFS powder escape
+/// from all internal coolant voxels to a port (`G3`).
 pub fn verify_dfm_and_coolant_escape(spec: &DfmVoxelSpec) -> Result<DfmReport, GeometryRejection> {
     let (nx, ny, nz) = (spec.nx, spec.ny, spec.nz);
     if nx == 0 || ny == 0 || nz == 0 {
@@ -352,10 +343,8 @@ pub fn verify_dfm_and_coolant_escape(spec: &DfmVoxelSpec) -> Result<DfmReport, G
         }
     }
 
-    // 1. Minimum solid wall thickness check along x, y, z contiguous solid runs!
     let mut min_obs = usize::MAX;
     if spec.min_wall_cells > 0 {
-        // x-runs
         for j in 0..ny {
             for k in 0..nz {
                 let mut i = 0;
@@ -435,7 +424,7 @@ pub fn verify_dfm_and_coolant_escape(spec: &DfmVoxelSpec) -> Result<DfmReport, G
         min_obs = 0;
     }
 
-    // 2. Exact LPBF 45-degree overhang check: every solid cell at k > 0 must have a solid support in 3x3 at k-1!
+    // 45-degree LPBF overhang: every solid cell at k > 0 needs support in the 3x3 patch at k - 1.
     if spec.check_45deg_overhang {
         for i in 0..nx {
             for j in 0..ny {
@@ -464,7 +453,6 @@ pub fn verify_dfm_and_coolant_escape(spec: &DfmVoxelSpec) -> Result<DfmReport, G
         }
     }
 
-    // 3. Exact deterministic BFS powder-escape / coolant connectivity check!
     if spec.require_powder_escape && coolant_cells > 0 {
         if port_cells == 0 {
             return Err(GeometryRejection::NoCoolantPort);
@@ -527,9 +515,7 @@ pub fn verify_dfm_and_coolant_escape(spec: &DfmVoxelSpec) -> Result<DfmReport, G
     })
 }
 
-// ========================== 3. G3-DFA: COLLISION-FREE RIGID-BODY ASSEMBLY SEQUENCE ==========================
-
-/// Exact integer axis-aligned bounding box `[x0, x1] x [y0, y1] x [z0, z1]` (e.g. in micrometers!).
+/// Exact integer axis-aligned bounding box `[x0, x1] x [y0, y1] x [z0, z1]` (e.g., micrometers).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IntBox3D {
     pub x0: i64,
@@ -545,7 +531,7 @@ impl IntBox3D {
         self.x0 < self.x1 && self.y0 < self.y1 && self.z0 < self.z1
     }
 
-    /// Strict interior overlap (`false` when boxes merely touch face-to-face at a mated datum!).
+    /// Strict interior overlap (`false` when boxes touch face-to-face at a mated datum).
     #[inline]
     pub fn overlaps(&self, o: &Self) -> bool {
         self.x0 < o.x1 && o.x0 < self.x1
@@ -553,7 +539,7 @@ impl IntBox3D {
             && self.z0 < o.z1 && o.z0 < self.z1
     }
 
-    /// Exact swept volume when extracting along `axis` (`0=x, 1=y, 2=z`) to `+inf` (`dir > 0`) or `-inf` (`dir < 0`).
+    /// Swept volume when extracting along `axis` (`0=x, 1=y, 2=z`) to `+inf` (`dir > 0`) or `-inf` (`dir < 0`).
     pub fn swept_to_inf(&self, axis: u8, dir: i8) -> Self {
         let mut s = *self;
         match (axis, dir > 0) {
@@ -569,15 +555,15 @@ impl IntBox3D {
     }
 }
 
-/// One rigid component (union of exact integer sub-boxes for housings, U-cores, flanges, bolts, bearings).
+/// Rigid component modeled as a union of integer axis-aligned sub-boxes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AssemblyPartGeom {
     pub part_id: u32,
     pub boxes: Vec<IntBox3D>,
 }
 
-/// One disassembly step removing `part_id` rigidly along `axis` (`0=x, 1=y, 2=z`) in direction `dir` (`-1` or `+1`).
-/// The reverse of a verified disassembly sequence is a guaranteed collision-free assembly plan!
+/// Single disassembly step translating `part_id` along `axis` (`0=x, 1=y, 2=z`) in direction `dir` (`-1` or `+1`).
+/// Reversing a verified disassembly sequence yields a collision-free assembly order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DisassemblyStep {
     pub part_id: u32,
@@ -622,7 +608,7 @@ pub struct AssemblyKinematicsReport {
     pub num_steps_verified: usize,
 }
 
-/// Zero-Trust Pure-Integer Collision-Free Rigid-Body Assembly / Disassembly Verifier (`G3-DFA`)!
+/// Verifies zero initial interpenetration and collision-free rigid-body swept extraction (`G3-DFA`).
 pub fn verify_rigid_assembly_sequence(
     spec: &AssemblyKinematicsSpec,
 ) -> Result<AssemblyKinematicsReport, GeometryRejection> {
@@ -630,7 +616,6 @@ pub fn verify_rigid_assembly_sequence(
     if n == 0 || spec.disassembly_steps.len() != n {
         return Err(GeometryRejection::InvalidAssemblyBox);
     }
-    // 1. Validate boxes & unique part IDs
     for i in 0..n {
         if spec.parts[i].boxes.is_empty() {
             return Err(GeometryRejection::InvalidAssemblyBox);
@@ -646,7 +631,6 @@ pub fn verify_rigid_assembly_sequence(
                     part_id: spec.parts[i].part_id,
                 });
             }
-            // Check zero initial interpenetration in the final mated assembly!
             for ba in &spec.parts[i].boxes {
                 for bb in &spec.parts[j].boxes {
                     if ba.overlaps(bb) {
@@ -660,7 +644,6 @@ pub fn verify_rigid_assembly_sequence(
         }
     }
 
-    // 2. Verify swept-volume extraction at EVERY step against all remaining parts!
     let mut removed = vec![false; n];
     for (step_idx, step) in spec.disassembly_steps.iter().enumerate() {
         if step.axis > 2 || (step.dir != -1 && step.dir != 1) {
@@ -703,9 +686,7 @@ pub fn verify_rigid_assembly_sequence(
     })
 }
 
-// ========================== 4. G4: 3D SDT TOLERANCE STACKUP CHAIN VERIFIER ==========================
-
-/// One datum / manufacturing tolerance link in the 3D actuator assembly loop (exact micrometer integers!).
+/// One datum or manufacturing tolerance link in the 3D assembly loop (micrometers).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ToleranceLinkUm {
     pub link_id: u32,
@@ -719,8 +700,8 @@ pub struct ToleranceLinkUm {
     pub pm_flange_gap_um: u64,
 }
 
-/// Complete 3D Small Displacement Torsor (SDT) worst-case tolerance stackup specification!
-/// All physical lengths are exact integers in micrometers (`1 mm = 1000 um`, `1 m = 1_000_000 um`).
+/// 3D Small Displacement Torsor (SDT) worst-case tolerance stackup specification.
+/// Lengths are exact integers in micrometers (`1 mm = 1000 um`, `1 m = 1_000_000 um`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SdtToleranceStackupSpec {
     pub nominal_x_um: u64,
@@ -767,15 +748,14 @@ pub struct SdtToleranceReport {
     pub max_airgap_um: u64,
     /// Worst-case dimensionless flange contact gap `g_0_max = sum(pm_flange_gap_um) / flange_scale_um`.
     pub worst_flange_gap_norm: BigRat,
-    /// Required 3D GD&T scale box for Maxwell EM (`z` axis scaled by exact airgap tolerance!).
+    /// Required 3D GD&T scale box for Maxwell EM (`z` axis scaled by airgap tolerance).
     pub required_em_gdt_box: GdtScaleBox3D,
-    /// Required 3D GD&T scale box for Thermal CHT housing/winding dimensional tolerances!
+    /// Required 3D GD&T scale box for thermal CHT dimensional tolerances.
     pub required_thermal_gdt_box: GdtScaleBox3D,
 }
 
-/// Zero-Trust Exact Integer 3D SDT Tolerance Stackup Verifier (`G4`)!
-/// Computes worst-case exact airgap clearance, flange gap `g_0_max`, and exact `GdtScaleBox3D`
-/// bounds that MUST be contained by the `M1`, `M3`, and `M5` physics certificates!
+/// Verifies a 3D SDT tolerance chain (`G4`), returning worst-case airgap clearance, flange gap
+/// `g_0_max`, and required `GdtScaleBox3D` envelopes for the `M1`, `M3`, and `M5` checks.
 pub fn verify_sdt_tolerance_stackup(
     spec: &SdtToleranceStackupSpec,
 ) -> Result<SdtToleranceReport, GeometryRejection> {
@@ -811,8 +791,7 @@ pub fn verify_sdt_tolerance_stackup(
     }
     let max_airgap_um = spec.nominal_airgap_um + sag;
 
-    // Normalize relative tolerances cleanly to `scale_den = 10_000` (0.01% exact conservative ceil!)
-    // Exact conservative ceiling: `ceil(pm * D / nom) = (pm * D + nom - 1) / nom`!
+    // Conservative integer ceiling to scale_den = 10_000 (0.01% resolution): ceil(pm * D / nom).
     const D: u64 = 10_000;
     let ceil_rel = |pm: u64, nom: u64| -> Result<u64, GeometryRejection> {
         let num = (pm as u128) * (D as u128) + (nom as u128) - 1;

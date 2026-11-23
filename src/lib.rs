@@ -1,13 +1,13 @@
-//! Nooterra Proof Kernel (`nooterra-kernel`): Zero-trust `#![no_std]`, `#![forbid(unsafe_code)]`,
-//! zero-dependency proof kernel for 3D continuum `Nooterra` certificates.
+//! Standalone `#![no_std]`, `#![forbid(unsafe_code)]`, zero-dependency proof verifier
+//! for Nooterra 3D continuum multiphysics, geometry, tolerance, and assembly certificates.
 //!
-//! Features:
-//! - Exact arbitrary-precision `BigUint`/`BigInt`/`BigRat` arithmetic (Knuth D).
-//! - **Two-Tier Sound PSD Verifier**:
-//!   - Tier 1: Rump (2006) / Higham Thm 10.14 verified shifted-Cholesky fast path (`~0.5 μs/cone`).
-//!   - Tier 2: Exact `BigInt` fraction-free Bareiss `LDL^T` automatic fallback (zero rounding gap).
-//! - Complete zero-trust 3D mesh, boundary, Neumann cone, polytopic uncertainty envelope,
-//!   and compositional subdomain interface contract verification.
+//! Core components:
+//! - Arbitrary-precision `BigUint`, `BigInt`, and `BigRat` arithmetic (Knuth Algorithm D).
+//! - Two-tier PSD verification: Rump (2006) / Higham Thm 10.14 verified shifted Cholesky
+//!   with exact `BigInt` fraction-free Bareiss `LDL^T` fallback.
+//! - Independent verification of simplicial 3D statics, `HMZ1` contact and yield, Q1 buckling
+//!   LMIs, `RT_0` thermal conduction, `ND_0` magnetostatics, curved B-Rep sandwiching, DFM/DFA,
+//!   SDT tolerance chains, and `.ntcert` assembly bundles.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -82,30 +82,26 @@ mod tests {
 
     #[test]
     fn two_tier_agrees_with_exact_bareiss_on_all_regimes() {
-        // 1. Strictly PD 3x3 -> Tier 1 Rump fast path proves PD AND Tier 2 agrees
         let pd = vec![2i128, -1, 0, -1, 2, -1, 0, -1, 2];
         assert_eq!(verify_psd_i128_scaled(&pd, 3, PsdMode::TwoTierSound), PsdOutcome::ProvenFastRump);
         assert_eq!(verify_psd_i128_scaled(&pd, 3, PsdMode::StrictExactOnly), PsdOutcome::ProvenExactBareiss);
 
-        // 2. Positive semidefinite with zero pivot -> Tier 1 declines, Tier 2 proves exact PSD!
         let psd_zero = vec![1i128, 0, 1, 0, 0, 0, 1, 0, 1];
         assert_eq!(verify_psd_i128_scaled(&psd_zero, 3, PsdMode::TwoTierSound), PsdOutcome::ProvenExactBareiss);
         assert_eq!(verify_psd_i128_scaled(&psd_zero, 3, PsdMode::StrictExactOnly), PsdOutcome::ProvenExactBareiss);
 
-        // 3. Barely PD (det = 10^-14 relative) -> Tier 1 conservatively declines, Tier 2 proves exact PSD!
+        // Relative det = 1e-14: Tier 1 declines conservatively, Tier 2 certifies exact PSD.
         let barely_pd = vec![1_000_000_000_000_000i128, 1_000_000_000_000_000, 1_000_000_000_000_000, 1_000_000_000_000_001];
         assert_eq!(verify_psd_i128_scaled(&barely_pd, 2, PsdMode::TwoTierSound), PsdOutcome::ProvenExactBareiss);
 
-        // 4. Barely indefinite (det = -10^-15 relative) -> BOTH tiers reject!
+        // Relative det = -1e-15: both tiers reject.
         let barely_bad = vec![1_000_000_000_000_000i128, 1_000_000_000_000_000, 1_000_000_000_000_000, 999_999_999_999_999];
         assert_eq!(verify_psd_i128_scaled(&barely_bad, 2, PsdMode::TwoTierSound), PsdOutcome::Rejected);
         assert_eq!(verify_psd_i128_scaled(&barely_bad, 2, PsdMode::StrictExactOnly), PsdOutcome::Rejected);
 
-        // 5. Indefinite with zero diagonal & nonzero off-diagonal -> REJECTED
         let bad_zero = vec![1i128, 0, 0, 0, 0, 1, 0, 1, 1];
         assert_eq!(verify_psd_i128_scaled(&bad_zero, 3, PsdMode::TwoTierSound), PsdOutcome::Rejected);
 
-        // 6. Asymmetric tamper -> REJECTED
         let asym = vec![2i128, 1, 0, 2];
         assert_eq!(verify_psd_i128_scaled(&asym, 2, PsdMode::TwoTierSound), PsdOutcome::Rejected);
     }
@@ -121,15 +117,13 @@ mod tests {
 
     #[test]
     fn hmz1_exact_uniaxial_tension_yield_and_tamper_refusal() {
-        // Unit cube [0,1]^3, E = 1, nu = 1/4 => mu = 2/5, lam = 2/5.
-        // Uniform tension t_x = +1 on x=1 => exact sig_xx = 1 everywhere, exact compliance C = 1/1,
-        // exact max von Mises squared = 1/1!
+        // Unit cube [0,1]^3, E = 1, nu = 1/4 (mu = lam = 2/5), uniaxial t_x = 1 on x = 1.
         let free = BoundaryFaceKind::Neumann { traction_num: [0, 0, 0], traction_den: 1 };
         let spec = HmzSpec3D {
             nx: 2, ny: 2, nz: 2, grid_den: 2, dx_num: 1, dy_num: 1, dz_num: 1,
             mat_den: 10,
             material_corners: vec![
-                MaterialCorner { mu_num: 4, lam_num: 4, omega2_rho_num: 0 }, // E = 1
+                MaterialCorner { mu_num: 4, lam_num: 4, omega2_rho_num: 0 },
             ],
             face_kinds: [
                 BoundaryFaceKind::Dirichlet,
@@ -152,12 +146,10 @@ mod tests {
         assert_eq!(rep.worst_compliance_upper, BigRat::from_i64(1, 1));
         assert_eq!(rep.max_von_mises_sq, BigRat::from_i64(1, 1));
 
-        // Lower yield limit to 99/100 -> YieldLimitExceeded!
         let mut bad_y = cert.clone();
         bad_y.spec.yield_limit = Some((99, 100));
         assert!(matches!(verify_hmz_cert(&bad_y), Err(HmzRejection::YieldLimitExceeded { .. })));
 
-        // 1-LSB equilibrium tamper on interior fx -> REFUSED!
         let mut bad = cert.clone();
         bad.witness.fx[hmz::idx_fx(2, 2, 1, 0, 0)] += 1;
         assert!(matches!(verify_hmz_cert(&bad), Err(HmzRejection::EquilibriumViolation { .. })));
@@ -165,10 +157,7 @@ mod tests {
 
     #[test]
     fn hmz1_3d_circular_friction_cone_and_farkas_slip_infeasibility() {
-        // 1x1x1 cube with Contact (mu = 3/10, gap = 1/100) on x = 0!
-        // Uniform compression fx = -100, uniform shear ez = -18, ey = -24 (flux_den = 100):
-        //   p_n = 1.00, ||tau||_2 = sqrt(0.18^2 + 0.24^2) = 0.30 == mu * p_n -> EXACTLY SAFE!
-        //   (Need matching boundary tractions on y=0,1 (t_x = +-0.18) and z=0,1 (t_x = +-0.24)!)
+        // Unit cube with contact (mu = 0.30, gap = 0.01) on x = 0; p_n = 1.00, tau = (-0.18, -0.24).
         let make_spec = |ty_num: i64, tz_num: i64, gap_num: i64| HmzSpec3D {
             nx: 1, ny: 1, nz: 1, grid_den: 1, dx_num: 1, dy_num: 1, dz_num: 1,
             mat_den: 10,
@@ -195,12 +184,10 @@ mod tests {
                 ez: vec![-18; 4],
             },
         };
-        let rep = verify_hmz_cert(&safe_cert).expect("exact Pythagorean (0.18, 0.24) <= 0.30 MUST pass!");
+        let rep = verify_hmz_cert(&safe_cert).expect("Pythagorean boundary shear (0.18, 0.24) <= 0.30 must pass");
         assert_eq!(rep.contact_faces_verified, 1);
-        // Contact gap work = 2 * Area(1) * gap(1/100) * p_n(1) = 2/100 = 1/50!
         assert_eq!(rep.contact_gap_compliance, BigRat::from_i64(1, 50));
 
-        // 1-LSB circular friction cone violation: (-19, -24) has 19^2+24^2 = 937 > 900 -> REFUSED!
         let mut slip_cert = safe_cert.clone();
         slip_cert.spec = make_spec(-19, -24, 0);
         slip_cert.witness.ez = vec![-19; 4];
@@ -209,7 +196,6 @@ mod tests {
             Err(HmzRejection::ContactCircularFrictionViolation { side: 0, j: 0, k: 0 })
         ));
 
-        // Tension violation on contact face (fx = +1 > 0) -> REFUSED!
         let mut tens_cert = safe_cert.clone();
         tens_cert.spec.face_kinds[1] = BoundaryFaceKind::Neumann { traction_num: [1, -18, -24], traction_den: 100 };
         tens_cert.witness.fx = vec![1; 2];
@@ -218,8 +204,7 @@ mod tests {
             Err(HmzRejection::ContactTensionViolation { side: 0, j: 0, k: 0 })
         ));
 
-        // Exact Farkas 3D rigid-body slip infeasibility proof for (F_x=-1.00, F_y=-0.21, F_z=-0.28), mu=0.30:
-        // Both 2D axis checks say SAFE (0.21 < 0.30, 0.28 < 0.30), yet sqrt(0.21^2+0.28^2) = 0.35 > 0.30!
+        // Diagonal shear (-0.21, -0.28) passes per-axis checks (< 0.30) but exceeds circular cone (0.35 > 0.30).
         let unsafe_spec = HmzSpec3D {
             nx: 1, ny: 1, nz: 1, grid_den: 1, dx_num: 1, dy_num: 1, dz_num: 1,
             mat_den: 10,
@@ -235,9 +220,8 @@ mod tests {
             yield_limit: None,
         };
         let srep = verify_hmz_3d_slip_infeasibility(&unsafe_spec, [30, -60, -80])
-            .expect("Pythagorean (30, -60, -80) slip witness MUST prove 3D infeasibility!");
-        assert_eq!(srep.virtual_work, BigRat::from_i64(5, 1)); // -30 + 12.6 + 22.4 = +5!
-        // Safe spec (-0.18, -0.24) CANNOT produce positive virtual work with same witness!
+            .expect("Pythagorean slip witness (30, -60, -80) must prove 3D infeasibility");
+        assert_eq!(srep.virtual_work, BigRat::from_i64(5, 1));
         let mut safe_f_spec = unsafe_spec.clone();
         safe_f_spec.face_kinds[3] = BoundaryFaceKind::Neumann { traction_num: [0, -18, 0], traction_den: 100 };
         safe_f_spec.face_kinds[5] = BoundaryFaceKind::Neumann { traction_num: [0, 0, -24], traction_den: 100 };
@@ -249,7 +233,6 @@ mod tests {
 
     #[test]
     fn buckling_exact_q1_integrals_match_gauss_and_certify_column() {
-        // 1. Cross-check exact_q1_ke_hat and exact_q1_ge_hat against 3x3x3 Gauss quadrature on non-cubic cell!
         let (dx_i, dy_i, dz_i) = (3i128, 2i128, 5i128);
         let (dx, dy, dz) = (3.0f64, 2.0f64, 5.0f64);
         let (mu_i, lam_i) = (4i128, 6i128);
@@ -259,7 +242,6 @@ mod tests {
 
         let ke_exact = exact_q1_ke_hat(dx_i, dy_i, dz_i, mu_i, lam_i).unwrap();
 
-        // Arbitrary non-trivial HMZ1 stress polynomial inside the cell
         let (fx0, fx1, fy0, fy1, fz0, fz1) = (-7i128, -3i128, 2i128, -1i128, 4i128, 1i128);
         let ez = [2i128, -3, 5, -1];
         let ey = [-4i128, 1, -2, 6];
@@ -279,7 +261,7 @@ mod tests {
 
         let ge_exact = exact_q1_ge_hat(dx_i, dy_i, dz_i, sbx_l, sby_l, sbz_l, ez, ey, ex).unwrap();
 
-        // 3x3x3 Gauss quadrature (exact for polynomials up to degree 5!)
+        // 3x3x3 Gauss-Legendre quadrature is exact up to polynomial degree 5.
         let gp = [-(0.6f64).sqrt(), 0.0, (0.6f64).sqrt()];
         let gw = [5.0 / 9.0, 8.0 / 9.0, 5.0 / 9.0];
         let mut ke_num = [[0.0f64; 24]; 24];
@@ -370,10 +352,7 @@ mod tests {
             }
         }
 
-        // 2. End-to-end 3D Euler column buckling LMI test (clamped [0,4]x[0,1]x[0,1], E=1, sigma_xx=-1/100):
-        //    Euler cantilever buckling P_cr = pi^2 * E * I / (4 L^2) = pi^2 * (1/12) / 64 ~ 0.01285,
-        //    so at sigma_xx = -0.01, Lambda_crit ~ 1.285!
-        //    Therefore Lambda = 1 (1/1) MUST PASS via Rump fast path, and Lambda = 2 (2/1) MUST FAIL!
+        // Cantilever [0,4]x[0,1]x[0,1], E = 1, sigma_xx = -0.01 has Euler P_cr ~ 0.01285 (Lambda_crit ~ 1.285).
         let free = BoundaryFaceKind::Neumann { traction_num: [0, 0, 0], traction_den: 1 };
         let spec = HmzSpec3D {
             nx: 4, ny: 1, nz: 1, grid_den: 1, dx_num: 1, dy_num: 1, dz_num: 1,
@@ -397,9 +376,9 @@ mod tests {
         };
         let cert = HmzCert3D { spec, witness };
         let rep_ok = verify_hmz_buckling_lmi(&cert, 1, 1, PsdMode::TwoTierSound)
-            .expect("Sub-critical Lambda = 1.0 MUST be certified PD!");
+            .expect("sub-critical Lambda = 1.0 must pass");
         assert_eq!(rep_ok.corner_outcomes[0], PsdOutcome::ProvenFastRump);
-        assert_eq!(rep_ok.n_free_dofs, 48); // 4*2*2 = 16 free nodes -> 48 DOFs
+        assert_eq!(rep_ok.n_free_dofs, 48);
 
         let err_bad = verify_hmz_buckling_lmi(&cert, 2, 1, PsdMode::TwoTierSound).unwrap_err();
         assert_eq!(err_bad, BucklingRejection::BucklingLmiFailed { corner: 0 });
@@ -407,9 +386,8 @@ mod tests {
 
     #[test]
     fn thermal_cht_robin_exact_zero_duality_gap_and_tamper() {
-        // 1D exact CHT on unit cube [0,1]^3 (nx=2, ny=1, nz=1, dx=1/2, dy=1, dz=1):
-        // k = 1, Q = 0, x=0 Dirichlet T=0, x=1 Robin (h=1, T_inf=1), other 4 faces adiabatic (q.n = 0).
-        // Exact solution: T(x) = x/2, q_x = -1/2 => -2*Pi(T*) = -1/2 == J_dual(q*)!
+        // 1D CHT on [0,1]^3 with k = 1, Q = 0, T(0) = 0, Robin h = 1, T_inf = 1 at x = 1.
+        // Analytic solution: T(x) = x/2, q_x = -1/2, primal and dual bounds both equal -1/2.
         let adiab = ThermalBcKind::Neumann { flux_num: 0, flux_den: 1 };
         let spec = ThermalSpec3D {
             nx: 2, ny: 1, nz: 1, grid_den: 2, dx_num: 1, dy_num: 2, dz_num: 2,
@@ -438,12 +416,11 @@ mod tests {
         let rep_d = verify_thermal_dual_cert(&dual_cert).expect("exact Robin CHT dual must pass");
         assert_eq!(rep_d.worst_compliance_upper, BigRat::from_i64(-1, 2));
 
-        // Exact Q1 primal T(x) = x/2 -> nodes at ix=0: 0, ix=1: 1/4, ix=2: 1/2 (temp_den = 4)
         let mut t_nodes = vec![0i64; 3 * 2 * 2];
         for ix in 0..=2 {
             for iy in 0..=1 {
                 for iz in 0..=1 {
-                    t_nodes[thermal::idx_tnode(1, 1, ix, iy, iz)] = ix as i64; // 0, 1, 2 / 4
+                    t_nodes[thermal::idx_tnode(1, 1, ix, iy, iz)] = ix as i64;
                 }
             }
         }
@@ -451,7 +428,6 @@ mod tests {
             .expect("exact Robin CHT primal must pass");
         assert_eq!(rep_p.compliance_lower_per_corner[0], BigRat::from_i64(-1, 2));
 
-        // 1-LSB divergence tamper -> REFUSED!
         let mut bad = dual_cert.clone();
         bad.witness.qx[1] += 1;
         assert!(matches!(verify_thermal_dual_cert(&bad), Err(ThermalRejection::DivergenceViolation { .. })));
@@ -459,12 +435,7 @@ mod tests {
 
     #[test]
     fn maxwell_nedelec_exact_ampere_primal_dual_and_coupled_joule() {
-        // 3x3x3 unit grid (dx=dy=dz=1): closed current loop J around center cell (1,1,1)
-        // driven by exact Nedelec H with Hz(1,1,1) = 1? Wait: build J = curl(H_exact) directly!
-        // Put a single nonzero edge H_z(1, 1, 1) = 1 (all other H edges = 0):
-        //   curl(H)_x on x-face (1, 0, 1): +1, on (1, 1, 1): -1
-        //   curl(H)_y on y-face (0, 1, 1): -1, on (1, 1, 1): +1
-        //   (exact divergence-free closed current loop J around edge (1,1,1)!)
+        // Single nonzero edge H_z(1,1,1) = 1 induces closed current loop J = curl(H) on 4 adjacent faces.
         let (nx, ny, nz) = (3, 3, 3);
         let mut hx = vec![0i64; nx * (ny + 1) * (nz + 1)];
         let mut hy = vec![0i64; (nx + 1) * ny * (nz + 1)];
@@ -490,10 +461,8 @@ mod tests {
             h_witness: NedelecWitness3D { field_den: 1, ex: hx, ey: hy, ez: hz },
         };
         let rep_d = verify_maxwell_dual_cert(&em_dual).expect("exact Ampere Nedelec dual must pass");
-        // 4 cells share edge Hz(1,1,1)=1; each cell has int_cell Hz^2 = 1/9 => 4 * 1/9 = 4/9!
         assert_eq!(rep_d.worst_energy2_upper, BigRat::from_i64(4, 9));
 
-        // Primal A = 0 gives trivial valid lower bound 0 <= 4/9!
         let em_primal = MaxwellPrimalCert3D {
             spec: em_spec.clone(),
             a_witness: NedelecWitness3D {
@@ -506,16 +475,14 @@ mod tests {
         let rep_p = verify_maxwell_primal_cert(&em_primal).expect("valid primal must pass");
         assert!(rep_p.energy2_lower_per_corner[0] <= rep_d.energy2_upper_per_corner[0]);
 
-        // 1-LSB Ampere curl tamper -> REFUSED!
         let mut bad_em = em_dual.clone();
         bad_em.h_witness.ez[maxwell::idx_edge_z(ny, nz, 1, 1, 1)] += 1;
         assert!(matches!(verify_maxwell_dual_cert(&bad_em), Err(MaxwellRejection::AmpereCurlViolation { .. })));
 
-        // Coupled EM -> Thermal check: with sigma = 1 everywhere, each of the 4 cells touching the loop
-        // has 1 x-face (+-1) and 1 y-face (+-1), so int_cell |J|^2 = 1/3 + 1/3 = 2/3!
+        // Each of the 4 cells touching the loop carries one x-face and one y-face (|J|^2 integral = 2/3).
         let mut q_src = vec![0i64; 27];
         for &(ci, cj) in &[(0, 0), (1, 0), (0, 1), (1, 1)] {
-            q_src[(ci * ny + cj) * nz + 1] = 2; // 2/3!
+            q_src[(ci * ny + cj) * nz + 1] = 2;
         }
         let dir0 = ThermalBcKind::Dirichlet { temp_num: 0, temp_den: 1 };
         let th_spec = ThermalSpec3D {
@@ -524,7 +491,6 @@ mod tests {
             material_corners: vec![ThermalMaterialCorner { mat_den: 1, k_num: vec![1; 27], robin_h_num: [0; 6] }],
             face_bcs: [dir0; 6],
         };
-        // Exact integer back-sweep in x from right (qx(3)=0) to left!
         let mut qx = vec![0i64; (nx + 1) * ny * nz];
         for i in (0..nx).rev() {
             for j in 0..ny {
@@ -547,10 +513,9 @@ mod tests {
         assert_eq!(crep.active_conductor_cells, 4);
         assert_eq!(crep.total_joule_power, BigRat::from_i64(8, 3));
 
-        // 1-LSB Joule heat underestimate in thermal spec -> REFUSED!
         let mut bad_th = th_cert.clone();
-        bad_th.spec.q_src_num[(0 * ny + 0) * nz + 1] = 1; // 1/3 < 2/3!
-        bad_th.witness.qx[thermal::idx_qx(ny, nz, 0, 0, 1)] += 1; // keep div(q) === Q valid!
+        bad_th.spec.q_src_num[(0 * ny + 0) * nz + 1] = 1;
+        bad_th.witness.qx[thermal::idx_qx(ny, nz, 0, 0, 1)] += 1;
         assert!(matches!(
             verify_coupled_em_thermal(&em_dual, &bad_th, &sig, 1),
             Err(MaxwellRejection::JouleSourceUnderestimated { i: 0, j: 0, k: 1 })
@@ -559,10 +524,8 @@ mod tests {
 
     #[test]
     fn gdt_piola_8corner_exactness_for_thermal_and_maxwell() {
-        // 1D exact heat conduction along x: Q = 0, q_x = -1, k = 1, x=0 T=0, x=1 T=1 -> C_nom = 1 - 2 = -1?
-        // Easier: Q = 2, x=0 Dirichlet T=0, x=1 Adiabatic -> q_x = -2(1 - x), int_0^1 q_x^2 dx = 4/3!
-        // Under GD&T box ax in [9/10, 11/10], ay in [9/10, 11/10], az in [9/10, 11/10]:
-        // Pure x-flux scales by ax / (ay * az) => exact worst corner is (11/10) / ((9/10)*(9/10)) = 110 / 81!
+        // Q = 2, T(0) = 0, adiabatic at x = 1 gives q_x = -2(1 - x) and nominal energy 4/3.
+        // Pure x-flux scales by ax / (ay * az), peaking at (11/10) / (9/10)^2 = 110/81.
         let adiab = ThermalBcKind::Neumann { flux_num: 0, flux_den: 1 };
         let th_spec = ThermalSpec3D {
             nx: 1, ny: 1, nz: 1, grid_den: 1, dx_num: 1, dy_num: 1, dz_num: 1,
@@ -583,13 +546,11 @@ mod tests {
         let r_nom = verify_thermal_dual_cert(&th_cert).unwrap();
         assert_eq!(r_nom.worst_compliance_upper, BigRat::from_i64(4, 3));
         let r_gdt = verify_thermal_dual_cert_gdt(&th_cert, &gdt).unwrap();
-        // Exact analytical max over continuous box: (4/3) * (110/81) = 440 / 243!
         assert_eq!(r_gdt.worst_compliance_upper, BigRat::from_i64(440, 243));
     }
 
     #[test]
     fn curved_brep_sandwich_dfm_powder_escape_dfa_and_sdt() {
-        // 1. G1: Curved cylinder annulus (center (5,5), R_in=2, R_out=4, bolt hole at (8,5) r=1/2) on 10x10x2 grid!
         let spec = CurvedAnnulusSpec {
             nx: 10, ny: 10, nz: 2, grid_den: 1, dx_num: 1, dy_num: 1, dz_num: 1,
             r_den: 2, center_x_num: 10, center_y_num: 10, r_in_num: 4, r_out_num: 8, z_min_num: 0, z_max_num: 4,
@@ -626,7 +587,6 @@ mod tests {
         let w = CurvedSandwichWitness { in_mask: in_mask.clone(), out_mask: out_mask.clone() };
         let gre = verify_curved_annulus_sandwich(&spec, &w).expect("exact curved sandwich must pass");
         assert!(gre.inner_cells > 0 && gre.outer_cells > gre.inner_cells);
-        // Tamper: mark a boundary cell as strictly inside -> REFUSED!
         let mut bad_w = w.clone();
         let bnd_cid = (0..n).find(|&c| out_mask[c] == 1 && in_mask[c] == 0).unwrap();
         bad_w.in_mask[bnd_cid] = 1;
@@ -635,9 +595,7 @@ mod tests {
             Err(GeometryRejection::InnerShellProtrudesOutsideBrep { .. })
         ));
 
-        // 2. G3: DFM + Coolant Powder Escape BFS!
         let mut vox = vec![VOXEL_SOLID; 6 * 6 * 4];
-        // Carve connected U-shaped internal coolant channel exiting through port at (0, 2, 1)
         let vid = |i: usize, j: usize, k: usize| (i * 6 + j) * 4 + k;
         vox[vid(0, 2, 1)] = VOXEL_PORT;
         vox[vid(1, 2, 1)] = VOXEL_COOLANT;
@@ -648,7 +606,6 @@ mod tests {
             min_wall_cells: 1, check_45deg_overhang: true, require_powder_escape: true,
         };
         verify_dfm_and_coolant_escape(&dfm).expect("connected coolant channel must pass");
-        // Trap an isolated powder pocket at (4, 4, 2) -> REFUSED!
         let mut bad_dfm = dfm.clone();
         bad_dfm.voxels[vid(4, 4, 2)] = VOXEL_COOLANT;
         assert_eq!(
@@ -656,13 +613,12 @@ mod tests {
             Err(GeometryRejection::TrappedCoolantPowder { i: 4, j: 4, k: 2 })
         );
 
-        // 3. G3-DFA: Rigid-body assembly/disassembly sequence (Housing cup + Stator + Cap)!
         let housing = AssemblyPartGeom {
             part_id: 1,
             boxes: vec![
-                IntBox3D { x0: 0, x1: 10, y0: 0, y1: 10, z0: 0, z1: 2 },   // bottom
-                IntBox3D { x0: 0, x1: 2, y0: 0, y1: 10, z0: 2, z1: 8 },    // left wall
-                IntBox3D { x0: 8, x1: 10, y0: 0, y1: 10, z0: 2, z1: 8 },   // right wall
+                IntBox3D { x0: 0, x1: 10, y0: 0, y1: 10, z0: 0, z1: 2 },
+                IntBox3D { x0: 0, x1: 2, y0: 0, y1: 10, z0: 2, z1: 8 },
+                IntBox3D { x0: 8, x1: 10, y0: 0, y1: 10, z0: 2, z1: 8 },
             ],
         };
         let stator = AssemblyPartGeom {
@@ -676,13 +632,12 @@ mod tests {
         let dfa_ok = AssemblyKinematicsSpec {
             parts: vec![housing.clone(), stator.clone(), cap.clone()],
             disassembly_steps: vec![
-                DisassemblyStep { part_id: 3, axis: 2, dir: 1 },  // remove cap +z first!
-                DisassemblyStep { part_id: 2, axis: 2, dir: 1 },  // then stator +z!
-                DisassemblyStep { part_id: 1, axis: 2, dir: -1 }, // then housing -z!
+                DisassemblyStep { part_id: 3, axis: 2, dir: 1 },
+                DisassemblyStep { part_id: 2, axis: 2, dir: 1 },
+                DisassemblyStep { part_id: 1, axis: 2, dir: -1 },
             ],
         };
         verify_rigid_assembly_sequence(&dfa_ok).expect("valid disassembly must pass");
-        // Try pulling stator +z BEFORE removing cap -> COLLISION with cap (part 3)!
         let mut dfa_bad = dfa_ok.clone();
         dfa_bad.disassembly_steps.swap(0, 1);
         assert_eq!(
@@ -690,7 +645,6 @@ mod tests {
             Err(GeometryRejection::AssemblyCollision { moving_part: 2, blocking_part: 3, step_idx: 0 })
         );
 
-        // 4. G4: SDT Tolerance Stackup -> catches airgap rub when tolerances exceed safety clearance!
         let sdt = SdtToleranceStackupSpec {
             nominal_x_um: 100_000, nominal_y_um: 100_000, nominal_z_um: 50_000,
             nominal_airgap_um: 500, min_safe_airgap_um: 400, flange_scale_um: 50_000,
@@ -703,7 +657,7 @@ mod tests {
         assert_eq!(srep.min_airgap_um, 480);
         assert_eq!(srep.worst_flange_gap_norm, BigRat::from_i64(25, 50_000));
         let mut bad_sdt = sdt.clone();
-        bad_sdt.links[0].pm_airgap_um = 100; // 500 - 108 = 392 < 400 -> rub risk!
+        bad_sdt.links[0].pm_airgap_um = 100;
         assert_eq!(
             verify_sdt_tolerance_stackup(&bad_sdt),
             Err(GeometryRejection::AirgapRubRisk { min_airgap_num: 392, required_min_num: 400 })

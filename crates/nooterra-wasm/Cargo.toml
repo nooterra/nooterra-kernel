@@ -3,7 +3,7 @@ name = "nooterra-wasm"
 version = "0.3.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "Zero-dependency WebAssembly C-ABI binding for nooterra-kernel"
+description = "WebAssembly C-ABI wrapper for nooterra-kernel"
 
 [lib]
 crate-type = ["cdylib"]

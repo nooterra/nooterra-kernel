@@ -1,26 +1,16 @@
-//! Zero-Trust 3D Structural Buckling LMI & 3D Circular-Cone Slip Infeasibility Verifier
-//! (`#![no_std]`, `#![forbid(unsafe_code)]`, ZERO external dependencies).
+//! 3D structural buckling LMI and 3D circular-cone slip infeasibility verifier.
 //!
-//! 1. **`verify_hmz_buckling_lmi`**:
-//!    Takes a complete `HmzCert3D` stress certificate plus a claimed buckling safety load factor
-//!    `Lambda_cert = lambda_num / lambda_den >= 0`.
-//!    - First independently verifies the `HmzCert3D` stress field (`div(sigma*) === 0`, exact BCs,
-//!      and exact pointwise 3D von Mises yield `sigma_vM(x) <= sigma_Y`).
-//!    - Then INDEPENDENTLY assembles the exact closed-form rational 3D Q1 hexahedral elastic
-//!      stiffness `K_3D(mu, lam)` and geometric stiffness `K_G(sigma*)` in pure exact integer
-//!      arithmetic (ZERO Gauss quadrature, ZERO floating-point in assembly, ZERO trust in solver!).
-//!    - Finally runs the Two-Tier Sound PSD Verifier (Rump formally-verified shifted Cholesky +
-//!      exact `BigInt` Bareiss `LDL^T` fallback) on `K_3D(mc) + Lambda_cert * K_G(sigma*) >= 0`
-//!      across EVERY material uncertainty corner `mc`!
-//!    - Note (Tiered Proof Honesty): `verify_hmz_cert` proves zero-discretization-error continuum
-//!      equilibrium & pointwise yield, whereas `verify_hmz_buckling_lmi` proves exact zero-numerical-error
-//!      positive definiteness of the discrete 3D Q1 FEM tangent operator (mesh convergence of the
-//!      buckling eigenmode is checked separately via refinement).
+//! 1. `verify_hmz_buckling_lmi` independently verifies an `HmzCert3D` stress certificate,
+//!    assembles closed-form integer 3D Q1 elastic stiffness `K_3D(mu, lam)` and geometric
+//!    stiffness `K_G(sigma*)` without quadrature, and checks positive semidefiniteness of
+//!    `K_3D(mc) + Lambda_cert * K_G(sigma*)` across all material uncertainty corners via the
+//!    two-tier PSD verifier (Rump verified shifted Cholesky with exact `BigInt` Bareiss
+//!    fallback). The stress and yield bounds hold in the continuum; the buckling LMI certifies
+//!    the discrete 3D Q1 finite-element tangent operator without numerical rounding error.
 //!
-//! 2. **`verify_hmz_3d_slip_infeasibility`**:
-//!    Zero-trust Farkas / Virtual-Work proof that NO statically admissible 3D continuum stress
-//!    field exists for a bolted flange spec under 3D circular Coulomb friction (`||tau||_2 <= mu * p_n`).
-//!    Catches 3D diagonal slip failures where independent 2D axis checks falsely claim SAFE!
+//! 2. `verify_hmz_3d_slip_infeasibility` checks a Farkas virtual-work witness proving that no
+//!    statically admissible 3D stress field satisfies 3D circular Coulomb friction
+//!    `||tau||_2 <= mu * p_n`, including diagonal slip regimes missed by per-axis 2D bounds.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -87,8 +77,8 @@ fn node_signs(a: usize) -> (i128, i128, i128) {
     (sx, sy, sz)
 }
 
-/// Exact integer `24 x 24` element elastic stiffness matrix `K_e_hat = 3456 * g * p^2 * mat_den * K_e`,
-/// where `p = dx * dy * dz`. Zero floating-point, zero quadrature error!
+/// Exact integer `24 x 24` element elastic stiffness `K_e_hat = 3456 * g * p^2 * mat_den * K_e`,
+/// where `p = dx * dy * dz`.
 pub fn exact_q1_ke_hat(
     dx: i128,
     dy: i128,
@@ -153,7 +143,7 @@ pub fn exact_q1_ke_hat(
 
 /// Exact integer `8 x 8` scalar element geometric stiffness `G_e_hat = 3456 * g * p^2 * flux_den * G_e`
 /// for a cell with HMZ1 stress polynomial `(sbx_l, sby_l, sbz_l, ez, ey, ex)`.
-/// The 3D `24 x 24` geometric stiffness is identically `G_e_hat ⊗ I_3`!
+/// The 3D `24 x 24` geometric stiffness is `G_e_hat \otimes I_3`.
 #[allow(clippy::too_many_arguments)]
 pub fn exact_q1_ge_hat(
     dx: i128,
@@ -241,11 +231,9 @@ pub fn exact_q1_ge_hat(
     Some(ge)
 }
 
-/// Zero-Trust 3D Structural Buckling LMI Verifier!
-/// Independently verifies `cert` (`div(sigma*) === 0`, BCs, exact pointwise 3D von Mises yield),
-/// independently assembles exact integer `K_3D(mc) + (lambda_num / lambda_den) * K_G(sigma*)`
-/// for EVERY material uncertainty corner `mc`, and certifies positive semidefiniteness via our
-/// Two-Tier Sound PSD Verifier (Rump formally-verified shifted Cholesky + exact `BigInt` Bareiss)!
+/// Verifies `cert` (equilibrium, BCs, pointwise 3D von Mises yield), assembles exact integer
+/// `K_3D(mc) + (lambda_num / lambda_den) * K_G(sigma*)` for each material uncertainty corner `mc`,
+/// and checks positive semidefiniteness via the two-tier PSD verifier.
 pub fn verify_hmz_buckling_lmi(
     cert: &HmzCert3D,
     lambda_num: i64,
@@ -255,7 +243,6 @@ pub fn verify_hmz_buckling_lmi(
     if lambda_num < 0 || lambda_den == 0 {
         return Err(BucklingRejection::InvalidLambda);
     }
-    // 1. Independently verify the stress field (equilibrium + BCs + yield)!
     let stress_report =
         verify_hmz_cert(cert).map_err(BucklingRejection::StressCertRejected)?;
 
@@ -263,7 +250,6 @@ pub fn verify_hmz_buckling_lmi(
     let w = &cert.witness;
     let (nx, ny, nz) = (s.nx, s.ny, s.nz);
 
-    // 2. Map free Q1 nodes (clamped on any Dirichlet face)
     let dir_x0 = matches!(s.face_kinds[0], BoundaryFaceKind::Dirichlet);
     let dir_x1 = matches!(s.face_kinds[1], BoundaryFaceKind::Dirichlet);
     let dir_y0 = matches!(s.face_kinds[2], BoundaryFaceKind::Dirichlet);
@@ -307,7 +293,6 @@ pub fn verify_hmz_buckling_lmi(
     let dyz = dy * dz;
     let dxyz = dxy * dz;
 
-    // 3. Independently assemble exact integer global scalar geometric stiffness G_hat (n_free x n_free)
     let mut g_glob = vec![0i128; n_free * n_free];
     for i in 0..nx {
         for j in 0..ny {
@@ -375,7 +360,7 @@ pub fn verify_hmz_buckling_lmi(
         }
     }
 
-    // Common integer weights for K_3D_hat and K_G_hat (reduced by exact GCD!)
+    // Common integer weights for K_3D_hat and K_G_hat, reduced by GCD.
     let wk_raw = (w.flux_den as u128)
         .checked_mul(lambda_den as u128)
         .ok_or(BucklingRejection::IntegerOverflow)?;
@@ -386,8 +371,6 @@ pub fn verify_hmz_buckling_lmi(
     let w_k = i128::try_from(wk_raw / g_wt).map_err(|_| BucklingRejection::IntegerOverflow)?;
     let w_g = i128::try_from(wg_raw / g_wt).map_err(|_| BucklingRejection::IntegerOverflow)?;
 
-    // 4. For EVERY material uncertainty corner, assemble exact M = w_k * K_3D_hat + w_g * (G_hat ⊗ I_3)
-    //    and run our Two-Tier Sound PSD Verifier!
     let mut corner_outcomes = Vec::with_capacity(s.material_corners.len());
     let mut mat = vec![0i128; n_dof * n_dof];
 
@@ -477,19 +460,14 @@ pub fn verify_hmz_buckling_lmi(
     })
 }
 
-/// Zero-Trust Exact Farkas / Virtual-Work Proof of 3D Circular-Cone Rigid-Body Slip Infeasibility!
+/// Verifies a Farkas virtual-work proof of 3D circular-cone rigid-body slip infeasibility.
 ///
-/// For a box specification with `Contact { mu = mu_num / mu_den }` on `side 0` (`x = 0`, outward
-/// normal `n = (-1, 0, 0)`) and pure `Neumann` tractions on all 5 remaining sides `1..6`:
-/// Any statically admissible 3D continuum stress field `sigma in H(div; S)` satisfies:
-///   `F_ext · u + int_{x=0} (p_n u_x + tau_y u_y + tau_z u_z) dA = 0`
-/// for EVERY rigid-body translation `u = (u_x, u_y, u_z)`.
-/// Since `p_n >= 0` and `sqrt(tau_y^2 + tau_z^2) <= mu * p_n`, ANY rigid-body slip witness `u`
-/// inside the exact 3D circular dual cone:
-///   `u_x >= 0`  AND  `u_x^2 * mu_den^2 >= mu_num^2 * (u_y^2 + u_z^2)`
-/// guarantees `(p_n u_x + tau_y u_y + tau_z u_z) >= 0` pointwise on `x = 0`, hence `F_ext · u <= 0`.
-/// Therefore, exhibiting an exact integer vector `u` with `F_ext · u > 0` proves with 100%
-/// mathematical certainty that NO statically admissible 3D stress field exists (rigid-body 3D slip)!
+/// For a box with `Contact { mu = mu_num / mu_den }` on side 0 (`x = 0`, outward normal
+/// `n = (-1, 0, 0)`) and Neumann tractions on sides 1..6, every statically admissible stress field
+/// satisfies `F_ext . u + int_{x=0} (p_n u_x + tau_y u_y + tau_z u_z) dA = 0` for any rigid-body
+/// translation `u`. When `u` lies in the dual cone `u_x >= 0` and
+/// `u_x^2 * mu_den^2 >= mu_num^2 * (u_y^2 + u_z^2)`, the contact integral is nonnegative, so
+/// `F_ext . u > 0` proves no statically admissible stress field exists.
 pub fn verify_hmz_3d_slip_infeasibility(
     spec: &HmzSpec3D,
     slip_u: [i64; 3],
@@ -514,7 +492,6 @@ pub fn verify_hmz_3d_slip_infeasibility(
         _ => return Err(SlipRejection::MissingContactOrUnconstrainedNeumann),
     };
 
-    // 1. Verify u lies in the exact 3D circular dual cone: u_x >= 0 and u_x^2 * mu_den^2 >= mu_num^2 * (u_y^2 + u_z^2)
     if slip_u[0] < 0 {
         return Err(SlipRejection::SlipNotInDualCone);
     }
@@ -529,7 +506,6 @@ pub fn verify_hmz_3d_slip_infeasibility(
         return Err(SlipRejection::SlipNotInDualCone);
     }
 
-    // 2. Independently integrate exact rational total external force F_ext across sides 1..6!
     let lx = BigRat::new(
         BigInt::from_i128((spec.nx as i128) * (spec.dx_num as i128)),
         BigUint::from_u64(spec.grid_den),

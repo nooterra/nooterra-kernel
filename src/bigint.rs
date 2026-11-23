@@ -1,7 +1,8 @@
-//! Arbitrary-precision unsigned/signed integers and exact rationals (`no_std`, zero deps).
+//! Arbitrary-precision unsigned and signed integers and exact rationals (`no_std`).
 //!
-//! Uses base-2^32 little-endian limbs with exact Knuth Algorithm D division, Euclidean GCD/LCM,
-//! and exact top-53-bit rational-to-`f64` conversion with rigorous relative error bounds (no `libm`).
+//! Uses base-2^32 little-endian limbs, Knuth Algorithm D division, Euclidean GCD/LCM,
+//! and top-53-bit rational-to-`f64` conversion with a bounded relative error (`<= 8 * 2^-53`)
+//! without `libm`.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -501,9 +502,10 @@ impl Ord for BigRat {
 
 impl BigRat {
 
-    /// Pure `no_std` rational-to-`f64` conversion with guaranteed relative error `<= 8 * 2^-53`.
-    /// Returns `None` if magnitude would overflow `2^300` or underflow below `2^-300`
-    /// (causing the PSD verifier to safely fall back to exact `BigInt` Bareiss).
+    /// Converts to `f64` with relative error `<= 8 * 2^-53` without `libm`.
+    ///
+    /// Returns `None` if the binary exponent is outside `[-300, 300]` or the magnitude exceeds
+    /// `1e100`, signaling the PSD verifier to fall back to exact `BigInt` Bareiss.
     pub fn to_f64_checked(&self) -> Option<f64> {
         if self.is_zero() {
             return Some(0.0);
@@ -514,7 +516,7 @@ impl BigRat {
         if !(-300..=300).contains(&exp) {
             return None;
         }
-        // Exact IEEE-754 power of two 2^exp (no libm needed!)
+        // IEEE-754 binary64 encoding of 2^exp with bias 1023.
         let pow2 = f64::from_bits(((1023i64 + exp) as u64) << 52);
         let v = ((mn as f64) / (md as f64)) * pow2;
         if !v.is_finite() || v.abs() > 1e100 {

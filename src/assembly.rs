@@ -1,16 +1,14 @@
-//! Zero-Trust Unified High-Torque Robotic Actuator Assembly Proof Verifier & `.ntcert` Wire Codec
-//! (`S1` Typed COTS Contracts + Cross-Physics `G1+G3+G4+M1+M2+M3+M5+S1` Compositional Verification).
+//! Unified actuator assembly proof verifier and deterministic `.ntcert` binary codec.
 //!
-//! 100% `#![no_std]`, `#![forbid(unsafe_code)]`, ZERO external dependencies!
-//! Every single cross-discipline coupling is checked cryptographically inside the TCB:
-//!   - `G1` Curved B-Rep Sandwich (`Omega_in <= Omega_exact <= Omega_out`)
-//!   - `G3` DFM (min wall, 45-deg overhang, BFS coolant powder escape) & Collision-Free DFA Sequence
-//!   - `G4` 3D SDT Tolerance Stackup -> cryptographically enforces `M1` gap, `M3` GD&T box, `M5` GD&T box
-//!   - `M5` 3D Maxwell Reluctance Torque over 8-corner continuous GD&T box -> enforces target min torque
-//!   - `M5 -> M3` Coupled Joule-Thermal over 8-corner GD&T box -> enforces winding & COTS temp limits
-//!   - `M1` 3D Preloaded Bolted Flange Contact + Circular Friction Cone -> enforces torque-transfer shear
-//!   - `M2` 3D Housing Yield + Buckling LMI -> enforces global buckling safety factor
-//!   - `S1` COTS Bearing, ISO Bolt, Driver PCB & Encoder Ratings + Mass/Envelope Budgets!
+//! Checks cross-discipline couplings across eight gates without external dependencies:
+//!   - `G1`: curved B-Rep geometric sandwich (`Omega_in <= Omega_exact <= Omega_out`)
+//!   - `G3`: additive DFM (wall thickness, 45-deg overhang, BFS powder escape) and rigid-body DFA
+//!   - `G4`: 3D SDT tolerance stackup enforcing `M1` flange gap and `M3`/`M5` GD&T boxes
+//!   - `M5`: 3D Maxwell reluctance torque over the 8-corner continuous GD&T box
+//!   - `M3`: coupled Joule-thermal CHT over the 8-corner GD&T box
+//!   - `M1`: 3D preloaded bolted flange contact and circular friction cone
+//!   - `M2`: 3D housing yield and discrete Q1 buckling LMI
+//!   - `S1`: COTS bearing, bolt, driver, envelope, and mass contracts
 
 use alloc::vec::Vec;
 
@@ -41,7 +39,7 @@ pub const ASSEMBLY_KERNEL_ID: &str = "nooterra-kernel/3.0.0 actuator-assembly-nt
 pub const NTCERT_MAGIC: [u8; 4] = *b"NTCT";
 pub const NTCERT_VERSION: u32 = 3;
 
-/// High-level engineering target specification for the High-Torque Robotic Actuator!
+/// Engineering target specification for a robotic actuator assembly.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActuatorTargetSpec {
     /// Minimum required certified output torque (N*m = num / den).
@@ -56,15 +54,14 @@ pub struct ActuatorTargetSpec {
     /// Minimum required 3D housing buckling safety factor (`Lambda_req = num / den`).
     pub min_buckling_sf_num: i64,
     pub min_buckling_sf_den: u64,
-    /// Maximum allowed outer diameter & axial length (micrometers).
+    /// Maximum allowed outer diameter and axial length (micrometers).
     pub max_od_um: u64,
     pub max_length_um: u64,
     /// Maximum allowed total assembly mass (grams).
     pub max_mass_g: u64,
 }
 
-/// Typed COTS component contracts (`NT-Contract v1`, Wall S1)!
-/// Every datasheet parameter is encoded as exact integers/rationals (zero floats).
+/// Typed COTS component ratings (`NT-Contract v1`, gate `S1`) encoded as exact rationals.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CotsContractsSpec {
     /// Crossed-roller bearing max continuous torque rating (N*m = num / den).
@@ -81,87 +78,80 @@ pub struct CotsContractsSpec {
     /// ISO 898-1 Class 12.9 flange bolt circle radius (m = num / den).
     pub bolt_circle_radius_num: i64,
     pub bolt_circle_radius_den: u64,
-    /// Minimum conservative dry/lubricated steel-on-steel friction coefficient `mu_min` in COTS spec.
+    /// Minimum conservative steel-on-steel friction coefficient `mu_min`.
     pub bolt_min_mu_num: i64,
     pub bolt_min_mu_den: u64,
     /// Fastener kit mass (grams).
     pub bolts_mass_g: u64,
 
-    /// 48V GaN Driver PCB + Magnetic Encoder max continuous Joule dissipation capacity (W = num / den).
+    /// 48V GaN driver PCB and encoder max continuous Joule dissipation (W = num / den).
     pub driver_max_power_num: i64,
     pub driver_max_power_den: u64,
-    /// Driver PCB + Encoder max ambient housing temperature (deg C = num / den).
+    /// Driver PCB and encoder max ambient housing temperature (deg C = num / den).
     pub driver_max_temp_num: i64,
     pub driver_max_temp_den: u64,
-    /// Driver PCB + Encoder mass (grams).
+    /// Driver PCB and encoder mass (grams).
     pub electronics_mass_g: u64,
 
-    /// Custom machined/printed stator + rotor + housing + cooling jacket + flange mass (grams).
+    /// Custom stator, rotor, housing, cooling jacket, and flange mass (grams).
     pub custom_parts_mass_g: u64,
-    /// Actual designed outer diameter and axial length (micrometers).
+    /// Designed outer diameter and axial length (micrometers).
     pub actual_od_um: u64,
     pub actual_length_um: u64,
 }
 
-/// Physical scaling constants binding normalized dimensionless PDE meshes to exact SI units!
+/// Rational scaling constants mapping dimensionless PDE meshes to SI units.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PhysicalScalingContract {
-    /// Rotor angular sweep `dtheta = num / den` (rad) between Pos 1 and Pos 2.
+    /// Rotor angular sweep `dtheta = num / den` (rad) between positions 1 and 2.
     pub em_dtheta_num: i64,
     pub em_dtheta_den: u64,
-    /// Exact rational factor mapping raw EM energy-diff torque to SI N*m (`mu_0 * I_scale^2 * L_scale`).
+    /// Rational factor mapping raw EM energy-difference torque to SI N*m (`mu_0 * I_scale^2 * L_scale`).
     pub em_torque_scale_num: i64,
     pub em_torque_scale_den: u64,
-    /// Exact rational factor mapping raw coupled thermal `T_avg` to SI deg C rise.
+    /// Rational factor mapping raw coupled thermal `T_avg` to SI deg C rise.
     pub thermal_temp_scale_num: i64,
     pub thermal_temp_scale_den: u64,
-    /// Exact rational factor mapping raw coupled Joule power to SI Watts.
+    /// Rational factor mapping raw coupled Joule power to SI Watts.
     pub joule_power_scale_num: i64,
     pub joule_power_scale_den: u64,
-    /// Exact rational factor mapping flange dimensionless applied shear force `F_y` to SI Newtons.
+    /// Rational factor mapping flange dimensionless applied shear force `F_y` to SI Newtons.
     pub flange_force_scale_num: i64,
     pub flange_force_scale_den: u64,
-    /// Worst-case permeability corner index (`0` = low `mu_Fe` -> conservative torque!).
+    /// Conservative permeability corner index (`0` = low `mu_Fe`).
     pub em_corner_idx: usize,
 }
 
-/// Complete self-contained zero-trust High-Torque Robotic Actuator Assembly Certificate (`.ntcert`)!
+/// Self-contained actuator assembly certificate (`.ntcert`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActuatorAssemblyCert {
     pub target: ActuatorTargetSpec,
     pub cots: CotsContractsSpec,
     pub scaling: PhysicalScalingContract,
-    /// SHA-256 hash of the exported ISO 10303-21 STEP B-Rep CAD assembly file (cryptographically bound!).
+    /// SHA-256 digest of the bound ISO 10303-21 STEP B-Rep CAD file.
     pub step_cad_sha256: [u8; 32],
 
-    // G1: Curved B-Rep geometric sandwich proof
     pub housing_brep_spec: CurvedAnnulusSpec,
     pub housing_brep_witness: CurvedSandwichWitness,
 
-    // G3: DFM + Powder-Escape BFS + Collision-Free Rigid-Body DFA Sequence
     pub cooling_dfm_spec: DfmVoxelSpec,
     pub dfa_kinematics_spec: AssemblyKinematicsSpec,
 
-    // G4: 3D SDT Tolerance Stackup Chain + Declared Physics GD&T Boxes
     pub tolerance_spec: SdtToleranceStackupSpec,
     pub em_gdt_box: GdtScaleBox3D,
     pub thermal_gdt_box: GdtScaleBox3D,
 
-    // M5: 3D Maxwell Stator-Rotor Reluctance Torque (Primal + Dual at Pos 1 & Pos 2)
     pub em_primal_unaligned: MaxwellPrimalCert3D,
     pub em_dual_unaligned: MaxwellDualCert3D,
     pub em_primal_aligned: MaxwellPrimalCert3D,
     pub em_dual_aligned: MaxwellDualCert3D,
 
-    // M5 -> M3: Coupled Joule-Thermal Liquid-Cooled CHT
     pub winding_sigma_den: u64,
     pub winding_sigma_num: Vec<i64>,
     pub coupled_thermal_cert: ThermalDualCert3D,
 
-    // M1: 3D Preloaded Bolted Output Flange Contact + Circular Friction Cone
     pub flange_contact_cert: HmzCert3D,
 
-    // M2: 3D Housing Yield + Buckling LMI
     pub housing_buckling_cert: HmzCert3D,
 }
 
@@ -189,10 +179,10 @@ pub enum AssemblyRejection {
     CodecCorrupted(&'static str),
 }
 
-/// Complete cryptographic proof report returned ONLY when EVERY gate (`G1, G3, G4, M1, M2, M3, M5, S1`) passes!
+/// Proof report returned when all eight gates (`G1`, `G3`, `G4`, `M1`, `M2`, `M3`, `M5`, `S1`) pass.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActuatorAssemblyProofReport {
-    /// Master SHA-256 Merkle digest binding all 8 sub-proofs, STEP CAD hash, tolerances & COTS contracts!
+    /// Master SHA-256 digest binding all eight gate sub-reports, STEP CAD digest, tolerances, and COTS contracts.
     pub master_digest: [u8; 32],
     pub step_cad_sha256: [u8; 32],
 
@@ -205,7 +195,6 @@ pub struct ActuatorAssemblyProofReport {
     pub flange_contact: HmzProofReport,
     pub housing_buckling: BucklingProofReport,
 
-    // Certified SI engineering metrics (exact BigRat!)
     pub certified_torque_min_nm: BigRat,
     pub certified_torque_max_nm: BigRat,
     pub certified_joule_power_w: BigRat,
@@ -215,11 +204,10 @@ pub struct ActuatorAssemblyProofReport {
     pub total_mass_g: u64,
 }
 
-/// Zero-Trust End-to-End High-Torque Robotic Actuator Assembly Proof Verifier!
+/// Verifies all eight cross-discipline gates of an actuator assembly certificate.
 pub fn verify_actuator_assembly_cert(
     b: &ActuatorAssemblyCert,
 ) -> Result<ActuatorAssemblyProofReport, AssemblyRejection> {
-    // 0. Validate target & scaling denominators
     let t = &b.target;
     let c = &b.cots;
     let sc = &b.scaling;
@@ -239,18 +227,15 @@ pub fn verify_actuator_assembly_cert(
         return Err(AssemblyRejection::InvalidScalingOrTarget);
     }
 
-    // Gate 1 (G1): Curved B-Rep Geometric Sandwich (Omega_in <= Omega_exact <= Omega_out)
     let curved_sandwich =
         verify_curved_annulus_sandwich(&b.housing_brep_spec, &b.housing_brep_witness)
             .map_err(AssemblyRejection::GeometryFailed)?;
 
-    // Gate 2 (G3): DFM (wall thickness, 45-deg overhang, BFS coolant powder escape) & Rigid-Body DFA
     let dfm = verify_dfm_and_coolant_escape(&b.cooling_dfm_spec)
         .map_err(AssemblyRejection::GeometryFailed)?;
     let dfa = verify_rigid_assembly_sequence(&b.dfa_kinematics_spec)
         .map_err(AssemblyRejection::GeometryFailed)?;
 
-    // Gate 3 (G4): 3D SDT Tolerance Stackup -> Cryptographically Enforce GD&T Boxes & Flange Gap!
     let tolerance = verify_sdt_tolerance_stackup(&b.tolerance_spec)
         .map_err(AssemblyRejection::GeometryFailed)?;
     if !b.em_gdt_box.contains(&tolerance.required_em_gdt_box) {
@@ -260,8 +245,7 @@ pub fn verify_actuator_assembly_cert(
         return Err(AssemblyRejection::ThermalGdtBoxTooNarrow);
     }
 
-    // Check that M1 flange contact cert has a Contact face whose gap >= worst_flange_gap_norm
-    // and whose friction coefficient mu <= cots.bolt_min_mu (conservative!).
+    // M1 contact face must cover the SDT worst-case flatness gap and use mu <= cots.bolt_min_mu.
     let mut found_contact = false;
     let cots_mu = BigRat::from_i64(c.bolt_min_mu_num, c.bolt_min_mu_den);
     for fk in &b.flange_contact_cert.spec.face_kinds {
@@ -284,7 +268,6 @@ pub fn verify_actuator_assembly_cert(
         return Err(AssemblyRejection::FlangeMissingContactFace);
     }
 
-    // Gate 4 (M5): 3D Maxwell Reluctance Torque OVER Continuous 3D GD&T Tolerance Box!
     let torque_raw = verify_reluctance_torque_bracket_gdt(
         &b.em_primal_unaligned,
         &b.em_dual_unaligned,
@@ -306,7 +289,6 @@ pub fn verify_actuator_assembly_cert(
         return Err(AssemblyRejection::TargetTorqueNotMet);
     }
 
-    // Gate 5 (M5 -> M3): Cryptographically Coupled EM Joule -> Liquid-Cooled CHT OVER 3D GD&T Box!
     let coupled_em_thermal = verify_coupled_em_thermal_gdt(
         &b.em_dual_aligned,
         &b.coupled_thermal_cert,
@@ -333,12 +315,10 @@ pub fn verify_actuator_assembly_cert(
     let power_scale = BigRat::from_i64(sc.joule_power_scale_num, sc.joule_power_scale_den);
     let certified_joule_power_w = coupled_em_thermal.total_joule_power.mul(&power_scale);
 
-    // Gate 6 (M1): 3D Preloaded Bolted Output Flange Contact + Circular Friction Cone + Torque Coupling!
     let flange_contact = verify_hmz_cert(&b.flange_contact_cert)
         .map_err(AssemblyRejection::FlangeContactFailed)?;
 
-    // Independently integrate total tangential shear force (|F_y| + |F_z| on x_max or y/z sides)
-    // certified on the bolted output flange to guarantee it carries >= `certified_torque_max_nm / r_bolt_circle`!
+    // Integrate total tangential shear on Neumann faces to bound flange capacity >= torque_max / r_bolt_circle.
     let fs = &b.flange_contact_cert.spec;
     let gd_f = BigRat::from_i64(1, fs.grid_den);
     let lx = BigRat::from_i64((fs.nx as i64) * (fs.dx_num as i64), 1).mul(&gd_f);
@@ -349,7 +329,6 @@ pub fn verify_actuator_assembly_cert(
         lx.mul(&lz), lx.mul(&lz),
         lx.mul(&ly), lx.mul(&ly),
     ];
-    // Total tangential load (y/z components on Neumann faces when Contact is on side 0/1)
     let mut sum_fy = BigRat::zero();
     let mut sum_fz = BigRat::zero();
     for (s_idx, fk) in fs.face_kinds.iter().enumerate() {
@@ -363,7 +342,7 @@ pub fn verify_actuator_assembly_cert(
     let abs_rat = |r: &BigRat| -> BigRat {
         BigRat { num: BigInt { neg: false, mag: r.num.mag.clone() }, den: r.den.clone() }
     };
-    // Exact conservative lower bound on Euclidean shear magnitude ||(F_y, F_z)||_2 >= max(|F_y|, |F_z|)
+    // Conservative lower bound: ||(F_y, F_z)||_2 >= max(|F_y|, |F_z|).
     let fy_abs = abs_rat(&sum_fy);
     let fz_abs = abs_rat(&sum_fz);
     let raw_shear_lb = if fy_abs >= fz_abs { fy_abs } else { fz_abs };
@@ -376,7 +355,6 @@ pub fn verify_actuator_assembly_cert(
         return Err(AssemblyRejection::FlangeLoadBelowMotorTorque);
     }
 
-    // Gate 7 (M2): 3D Gearbox Housing Yield + Global Buckling LMI!
     let housing_buckling = verify_hmz_buckling_lmi(
         &b.housing_buckling_cert,
         t.min_buckling_sf_num,
@@ -385,7 +363,6 @@ pub fn verify_actuator_assembly_cert(
     )
     .map_err(AssemblyRejection::HousingBucklingFailed)?;
 
-    // Gate 8 (S1): COTS Component Ratings + Envelope + Mass Budget!
     let bearing_t_max = BigRat::from_i64(c.bearing_max_torque_num, c.bearing_max_torque_den);
     if certified_torque_max_nm > bearing_t_max {
         return Err(AssemblyRejection::CotsBearingTorqueExceeded);
@@ -414,7 +391,6 @@ pub fn verify_actuator_assembly_cert(
         return Err(AssemblyRejection::MassBudgetExceeded);
     }
 
-    // Gate 9: Master Cryptographic SHA-256 Merkle Proof Digest over ALL verified sub-reports + STEP CAD!
     let mut h = Sha256::new();
     h.update(ASSEMBLY_KERNEL_ID.as_bytes());
     h.update(&b.step_cad_sha256);
@@ -453,8 +429,6 @@ pub fn verify_actuator_assembly_cert(
         total_mass_g,
     })
 }
-
-// ========================== DETERMINISTIC ZERO-DEP `.ntcert` WIRE CODEC ==========================
 
 struct Enc {
     buf: Vec<u8>,
@@ -709,20 +683,18 @@ impl<'a> Dec<'a> {
     }
 }
 
-/// Deterministic zero-dependency `.ntcert` binary encoder with trailing SHA-256 wire integrity tag!
+/// Deterministic `.ntcert` binary encoder with trailing SHA-256 integrity tag.
 pub fn encode_ntcert(b: &ActuatorAssemblyCert) -> Vec<u8> {
     let mut e = Enc::new();
     e.bytes(&NTCERT_MAGIC);
     e.u32(NTCERT_VERSION);
 
-    // Target
     e.i64(b.target.min_torque_num); e.u64(b.target.min_torque_den);
     e.i64(b.target.max_winding_temp_num); e.u64(b.target.max_winding_temp_den);
     e.i64(b.target.coolant_temp_num); e.u64(b.target.coolant_temp_den);
     e.i64(b.target.min_buckling_sf_num); e.u64(b.target.min_buckling_sf_den);
     e.u64(b.target.max_od_um); e.u64(b.target.max_length_um); e.u64(b.target.max_mass_g);
 
-    // COTS
     e.i64(b.cots.bearing_max_torque_num); e.u64(b.cots.bearing_max_torque_den);
     e.i64(b.cots.bearing_max_temp_num); e.u64(b.cots.bearing_max_temp_den);
     e.u64(b.cots.bearing_runout_um); e.u64(b.cots.bearing_mass_g);
@@ -732,7 +704,6 @@ pub fn encode_ntcert(b: &ActuatorAssemblyCert) -> Vec<u8> {
     e.i64(b.cots.driver_max_temp_num); e.u64(b.cots.driver_max_temp_den); e.u64(b.cots.electronics_mass_g);
     e.u64(b.cots.custom_parts_mass_g); e.u64(b.cots.actual_od_um); e.u64(b.cots.actual_length_um);
 
-    // Scaling & STEP hash
     e.i64(b.scaling.em_dtheta_num); e.u64(b.scaling.em_dtheta_den);
     e.i64(b.scaling.em_torque_scale_num); e.u64(b.scaling.em_torque_scale_den);
     e.i64(b.scaling.thermal_temp_scale_num); e.u64(b.scaling.thermal_temp_scale_den);
@@ -741,7 +712,6 @@ pub fn encode_ntcert(b: &ActuatorAssemblyCert) -> Vec<u8> {
     e.u64(b.scaling.em_corner_idx as u64);
     e.bytes(&b.step_cad_sha256);
 
-    // G1 Curved B-Rep
     let g1 = &b.housing_brep_spec;
     e.u64(g1.nx as u64); e.u64(g1.ny as u64); e.u64(g1.nz as u64);
     e.u64(g1.grid_den); e.u64(g1.dx_num); e.u64(g1.dy_num); e.u64(g1.dz_num);
@@ -752,7 +722,6 @@ pub fn encode_ntcert(b: &ActuatorAssemblyCert) -> Vec<u8> {
     e.vec_u8(&b.housing_brep_witness.in_mask);
     e.vec_u8(&b.housing_brep_witness.out_mask);
 
-    // G3 DFM + DFA
     e.u64(b.cooling_dfm_spec.nx as u64); e.u64(b.cooling_dfm_spec.ny as u64); e.u64(b.cooling_dfm_spec.nz as u64);
     e.vec_u8(&b.cooling_dfm_spec.voxels);
     e.u64(b.cooling_dfm_spec.min_wall_cells as u64);
@@ -772,7 +741,6 @@ pub fn encode_ntcert(b: &ActuatorAssemblyCert) -> Vec<u8> {
         e.u32(st.part_id); e.u8(st.axis); e.u8(st.dir as u8);
     }
 
-    // G4 SDT Tolerance + GD&T Boxes
     let ts = &b.tolerance_spec;
     e.u64(ts.nominal_x_um); e.u64(ts.nominal_y_um); e.u64(ts.nominal_z_um);
     e.u64(ts.nominal_airgap_um); e.u64(ts.min_safe_airgap_um); e.u64(ts.flange_scale_um);
@@ -784,13 +752,11 @@ pub fn encode_ntcert(b: &ActuatorAssemblyCert) -> Vec<u8> {
     e.gdt(&b.em_gdt_box);
     e.gdt(&b.thermal_gdt_box);
 
-    // M5 Maxwell (4 certs)
     e.maxwell_spec(&b.em_primal_unaligned.spec); e.nedelec(&b.em_primal_unaligned.a_witness);
     e.maxwell_spec(&b.em_dual_unaligned.spec); e.nedelec(&b.em_dual_unaligned.h_witness);
     e.maxwell_spec(&b.em_primal_aligned.spec); e.nedelec(&b.em_primal_aligned.a_witness);
     e.maxwell_spec(&b.em_dual_aligned.spec); e.nedelec(&b.em_dual_aligned.h_witness);
 
-    // M5 -> M3 Coupled Thermal
     e.u64(b.winding_sigma_den);
     e.vec_i64(&b.winding_sigma_num);
     e.thermal_spec(&b.coupled_thermal_cert.spec);
@@ -799,11 +765,9 @@ pub fn encode_ntcert(b: &ActuatorAssemblyCert) -> Vec<u8> {
     e.vec_i64(&b.coupled_thermal_cert.witness.qy);
     e.vec_i64(&b.coupled_thermal_cert.witness.qz);
 
-    // M1 Flange & M2 Buckling
     e.hmz_cert(&b.flange_contact_cert);
     e.hmz_cert(&b.housing_buckling_cert);
 
-    // Trailing SHA-256 wire integrity tag!
     let mut sha = Sha256::new();
     sha.update(&e.buf);
     let tag = sha.finalize();
@@ -811,7 +775,7 @@ pub fn encode_ntcert(b: &ActuatorAssemblyCert) -> Vec<u8> {
     e.buf
 }
 
-/// Zero-trust `.ntcert` binary decoder — checks magic, version, trailing SHA-256 integrity, and exact EOF!
+/// Decodes a binary `.ntcert` payload, verifying magic bytes, version, trailing SHA-256 tag, and exact EOF.
 pub fn decode_ntcert(bytes: &[u8]) -> Result<ActuatorAssemblyCert, AssemblyRejection> {
     if bytes.len() < 40 {
         return Err(AssemblyRejection::CodecCorrupted("file too short"));

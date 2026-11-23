@@ -9,12 +9,12 @@ edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/nooterra/nooterra-kernel"
 homepage = "https://nooterra.ai"
-description = "Zero-trust no_std proof kernel for Nooterra 3D continuum multiphysics, geometry, DFM/DFA, tolerance, and COTS assembly certificates (.ntcert)"
+description = "no_std proof verifier for Nooterra .ntcert multiphysics, geometry, DFM/DFA, tolerance, and COTS assembly certificates"
 
-# Trusted Computing Base: zero external dependencies, ever.
+# The kernel crate carries no external dependencies.
 [dependencies]
 
-# Integer overflow must never silently wrap inside the verification kernel.
+# Trap on integer overflow in release builds.
 [profile.release]
 overflow-checks = true
 lto = true

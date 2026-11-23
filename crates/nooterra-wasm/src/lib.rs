@@ -1,7 +1,7 @@
-//! Zero-dependency WebAssembly C-ABI adapter for `nooterra-kernel`.
+//! WebAssembly C-ABI adapter for `nooterra-kernel`.
 //!
-//! All `unsafe` FFI pointer conversions are isolated strictly inside this thin wrapper,
-//! preserving `#![no_std]` and `#![forbid(unsafe_code)]` across 100% of `nooterra-kernel`.
+//! Isolates all `unsafe` FFI pointer conversions in this wrapper crate so
+//! `nooterra-kernel` remains `#![no_std]` and `#![forbid(unsafe_code)]`.
 
 use std::alloc::{alloc, dealloc, Layout};
 use std::cell::RefCell;
@@ -206,8 +206,10 @@ pub extern "C" fn nt_out_len() -> usize {
     LAST_JSON.with(|slot| slot.borrow().len())
 }
 
-/// Zero-trust verify raw `.ntcert` bytes (and optional `.step` bytes for cryptographic CAD binding).
-/// Returns `0` when CERTIFIED, `1` when REFUSED. Full JSON report available via `nt_out_ptr`/`nt_out_len`.
+/// Decodes and verifies raw `.ntcert` bytes and an optional `.step` CAD file.
+///
+/// Returns `0` when verified (`CERTIFIED`) and `1` when rejected (`REFUSED`).
+/// Call `nt_out_ptr` and `nt_out_len` to read the resulting UTF-8 JSON report.
 #[no_mangle]
 pub extern "C" fn nt_verify_ntcert(
     cert_ptr: *const u8,
@@ -260,18 +262,18 @@ pub extern "C" fn nt_verify_ntcert(
     }
 }
 
-/// Interactive adversarial verification entrypoint for live in-browser proofs.
-/// Applies a specific real physical/cryptographic tamper to the decoded `.ntcert` and executes
-/// the unmodified `nooterra-kernel` verifier live in WebAssembly:
-///   0 = Untampered baseline (CERTIFIED)
-///   1 = Flip 1 bit in `.ntcert` wire payload (CodecCorrupted)
-///   2 = Modify 1 byte in `.step` CAD file (StepCadSha256Mismatch)
-///   3 = Nudge tangential shear past 3D circular Coulomb friction cone (M1)
-///   4 = +1 LSB interior stress equilibrium cheat in bolted flange (M1)
-///   5 = Plug coolant exit port voxel creating powder trap (G3)
-///   6 = Reorder disassembly steps creating rigid-body collision (G3)
-///   7 = Understate winding thermal limit below certified hot-spot (M3)
-///   8 = Relax tolerance link causing rotor-stator airgap rub risk (G4)
+/// Verifies a `.ntcert` bundle after applying a deterministic mutation selected by `attack_id`.
+///
+/// Mutation modes:
+/// - `0`: Untampered baseline (`CERTIFIED`).
+/// - `1`: Flip 1 bit in the `.ntcert` payload (`WIRE`, `CodecCorrupted`).
+/// - `2`: Flip 1 bit in the `.step` CAD buffer (`CAD`, `StepCadSha256Mismatch`).
+/// - `3`: Push flange tangential shear past the 3D circular Coulomb friction cone (`M1`).
+/// - `4`: Add +1 LSB to an interior flange stress face to break equilibrium (`M1`).
+/// - `5`: Replace coolant port voxels with solid metal, failing DFM wall or coolant-escape checks (`G3`).
+/// - `6`: Swap the first two disassembly steps to induce a rigid-body collision (`G3`).
+/// - `7`: Lower the winding thermal limit below the certified hot-spot bound (`M3`).
+/// - `8`: Widen a tolerance link airgap bound past the safe clearance floor (`G4`).
 #[no_mangle]
 pub extern "C" fn nt_verify_attack(
     cert_ptr: *const u8,

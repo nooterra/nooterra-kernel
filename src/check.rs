@@ -1,18 +1,17 @@
-//! Zero-trust 3D `Nooterra` certificate verifier (`no_std`, `#![forbid(unsafe_code)]`).
+//! 3D simplicial strain-Riccati certificate verifier (`no_std`, `#![forbid(unsafe_code)]`).
 //!
 //! Independently checks:
-//!   1. Structural validity and exact positive orientation (`v6 > 0`) of every 3D tetrahedron.
-//!   2. Exact mesh boundary extraction (every face with incidence 1 MUST be classified in `spec`,
-//!      and no interior face may be falsely listed as boundary).
-//!   3. Exact rational Neumann traction balance (`2 * g * n == -t`) and exact `3x3` Neumann
-//!      boundary cone (`-H * n >= 0`) at all 3 vertices of every Neumann face.
-//!   4. Exact `10x10` strain-Riccati PSD cone at all `4 * T` tet corners across EVERY corner
-//!      of the polytopic material/frequency uncertainty box (`Spec3D::material_corners`),
-//!      using our Two-Tier Sound PSD Verifier (Rump verified Cholesky + exact `BigInt` Bareiss).
-//!   5. Exact arbitrary-precision rational lower bound `L = int_Omega c dV` (hence exact compliance
-//!      upper bound `C_comp <= -2 * L`, or exact frequency floor `omega_1 >= omega_min` when `L >= 0`).
-//!   6. Compositional interface contract verification (`verify_composed`): matches interface
-//!      faces 1-to-1 across subdomains with opposite normals and identical exact rational `(g, H)`.
+//!   1. Positive orientation (`v6 > 0`) of every tetrahedron.
+//!   2. Mesh boundary completeness (every face with incidence 1 must be classified in `spec`,
+//!      and no interior face may be listed as a boundary face).
+//!   3. Exact rational Neumann traction balance (`2 * g * n == -t`) and `3x3` Neumann boundary
+//!      cone (`-H * n >= 0`) at all three vertices of each Neumann face.
+//!   4. `10x10` strain-Riccati PSD cones at all `4 * T` tetrahedral corners across each material
+//!      and frequency uncertainty corner via the two-tier PSD verifier.
+//!   5. Exact rational lower bound `L = int_Omega c dV` (giving compliance upper bound
+//!      `C_comp <= -2 * L`, or frequency lower bound `omega_1 >= omega_min` when `L >= 0`).
+//!   6. Compositional interface contract matching (`verify_composed`) with opposite normals and
+//!      identical rational `(g, H)` traces across matched faces.
 
 use alloc::collections::BTreeMap;
 use alloc::vec;
@@ -128,13 +127,11 @@ fn check_tet_corner_10x10(
     div_h_raw: [[i128; 3]; 3],
     mode: PsdMode,
 ) -> PsdOutcome {
-    // Fast exact i128 assembly (zero allocations, zero divisions!)
     if let Some(m128) = assemble_10x10_i128(
         v6, coord_den, flux_den, mat_den, mc, c_num, g_corner, h_corner, div_g_raw, div_h_raw,
     ) {
         return verify_psd_i128_scaled(&m128, 10, mode);
     }
-    // Overflow-proof BigInt fallback
     let mut b = assemble_10x10_bigint(
         v6, coord_den, flux_den, mat_den, mc, c_num, g_corner, h_corner, div_g_raw, div_h_raw,
     );
@@ -361,7 +358,6 @@ fn validate_mesh_and_boundaries(
         return Err(Rejection::WitnessSizeMismatch);
     }
 
-    // 1. Validate every tet orientation & count face incidence to extract EXACT mesh boundary!
     let mut geoms = Vec::with_capacity(nt);
     let mut face_count: BTreeMap<[u32; 3], (u32, [u32; 3])> = BTreeMap::new();
     for (ti, &t) in spec.tets.iter().enumerate() {
@@ -409,7 +405,6 @@ fn validate_mesh_and_boundaries(
         }
     }
 
-    // 2. Verify every classified boundary face & all Neumann BCs!
     let mut bnd_rump = 0usize;
     let mut bnd_exact = 0usize;
     let mut num_iface = 0usize;
@@ -453,9 +448,9 @@ fn validate_mesh_and_boundaries(
                     let g = &witness.g_nodes[nd as usize];
                     let h = &witness.h_nodes[nd as usize];
 
-                    // (a) Exact rational traction balance: 2 * g * n == -t
+                    // Exact traction balance: 2 * g * n == -t
                     if is_zero_t {
-                        // Works for ANY angle triangle (exact integer g * nf == 0, zero sqrt!)
+                        // Exact integer g * nf == 0 holds for arbitrary triangle orientation without sqrt.
                         for i in 0..3 {
                             let mut acc = 0i128;
                             for d in 0..3 {
@@ -487,7 +482,7 @@ fn validate_mesh_and_boundaries(
                         return Err(Rejection::UnsupportedNonAxisNeumannTraction { face: fi });
                     }
 
-                    // (b) Exact 3x3 Neumann boundary cone: -(H * nf) >= 0 (works for ANY face angle!)
+                    // 3x3 Neumann boundary cone: -(H * nf) >= 0 for arbitrary face orientation.
                     let mut h3 = [0i128; 9];
                     for i in 0..3 {
                         for j in i..3 {
@@ -511,7 +506,6 @@ fn validate_mesh_and_boundaries(
         }
     }
 
-    // 3. Reject ANY unclassified true boundary face (prevents omitting free/loaded faces!)
     for (_key, (oriented, seen)) in true_bnd {
         if !seen {
             return Err(Rejection::UnclassifiedBoundaryFace { verts: oriented });
@@ -521,7 +515,7 @@ fn validate_mesh_and_boundaries(
     Ok((geoms, bnd_rump, bnd_exact, num_iface))
 }
 
-/// Zero-trust sequential (`no_std`) verifier for a complete 3D `Nooterra` certificate.
+/// Sequential (`no_std`) verifier for a 3D simplicial certificate.
 pub fn verify_cert(cert: &SimplicialCert3D, mode: PsdMode) -> Result<ProofReport, Rejection> {
     verify_cert_range_hook(cert, mode, |spec, witness, geoms, n_tets| {
         let mut rump_cnt = 0usize;
@@ -535,9 +529,8 @@ pub fn verify_cert(cert: &SimplicialCert3D, mode: PsdMode) -> Result<ProofReport
     })
 }
 
-/// Verifies all `4 * material_corners.len()` PSD cones of a single tetrahedron `ti`.
-/// Exposed cleanly so `std` callers can run tetrahedron checks in parallel across threads
-/// WITHOUT putting `std` inside the `no_std` kernel!
+/// Verifies all `4 * material_corners.len()` PSD cones for a range of tetrahedra so `std`
+/// callers can schedule verification across threads outside the `no_std` crate.
 pub fn verify_tet_batch(
     cert: &SimplicialCert3D,
     mode: PsdMode,
@@ -680,13 +673,12 @@ where
     })
 }
 
-/// Extracts physical interface face records keyed by `(tag, sorted physical vertex coords)`
-/// so compositional matching works even when subdomains A and B have independent vertex numbering!
+/// Extracts interface face records keyed by `(tag, sorted physical vertex coords)` so
+/// subdomains A and B match independently of local vertex numbering.
 fn extract_interface_faces(
     cert: &SimplicialCert3D,
 ) -> Result<BTreeMap<(u32, [[BigRat; 3]; 3]), ([BigRat; 3], [[BigRat; 6]; 3], [[BigRat; 10]; 3])>, Rejection>
 {
-    // Re-extract outward face orientations from tets
     let mut face_count: BTreeMap<[u32; 3], (u32, [u32; 3])> = BTreeMap::new();
     for &[a, b, c, d] in &cert.spec.tets {
         for f in [[a, c, b], [a, b, d], [b, c, d], [c, a, d]] {
@@ -743,10 +735,9 @@ fn cmp_vec3(a: &[BigRat; 3], b: &[BigRat; 3]) -> core::cmp::Ordering {
     core::cmp::Ordering::Equal
 }
 
-/// Compositional Zero-Trust Verifier (Theorem 5 of `NooterraKernel.lean`):
-/// Verifies subdomains A and B independently AND checks that EVERY interface face matches
-/// 1-to-1 with exact opposite outward normals (`n_A == -n_B`) and identical exact rational
-/// flux traces (`g_A == g_B`, `H_A == H_B`), proving `L_total = L_A + L_B`!
+/// Verifies subdomains A and B independently and checks that every interface face matches
+/// 1-to-1 with opposite outward normals (`n_A == -n_B`) and identical rational flux traces
+/// (`g_A == g_B`, `H_A == H_B`), establishing `L_total = L_A + L_B`.
 pub fn verify_composed(
     cert_a: &SimplicialCert3D,
     cert_b: &SimplicialCert3D,
@@ -763,13 +754,11 @@ pub fn verify_composed(
         let (nb, gb, hb) = if_b
             .get(&(*tag, coords.clone()))
             .ok_or(Rejection::InterfaceFaceUnmatched { tag: *tag })?;
-        // Normals must be exact opposites: na + nb == 0
         for d in 0..3 {
             if !na[d].add(&nb[d]).is_zero() {
                 return Err(Rejection::InterfaceNormalNotOpposite { tag: *tag });
             }
         }
-        // Flux traces g and H must be IDENTICAL across every matched vertex!
         if ga != gb || ha != hb {
             return Err(Rejection::InterfaceFluxMismatch { tag: *tag });
         }

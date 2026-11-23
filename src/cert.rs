@@ -1,4 +1,4 @@
-//! Exact-rational `.ntcert` 3D certificate data structures (`no_std`, zero deps).
+//! Exact-rational 3D simplicial certificate data structures (`no_std`).
 
 use alloc::vec::Vec;
 
@@ -64,8 +64,7 @@ pub struct BoundaryFaceSpec {
     pub kind: BoundaryFaceKind,
 }
 
-/// Complete exact-rational specification of a 3D `Nooterra` problem (including polytopic
-/// material/frequency uncertainty corners).
+/// Exact-rational 3D tetrahedral elasticity specification with polytopic material/frequency corners.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Spec3D {
     pub coord_den: u64,
@@ -132,7 +131,7 @@ impl Spec3D {
     }
 }
 
-/// Exact-rational dual flux witness for a 3D `Nooterra` certificate (`10x10` strain-Riccati form).
+/// Exact-rational dual flux witness for a 3D simplicial certificate (`10x10` strain-Riccati form).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Witness3D {
     /// Positive common denominator for all nodal fluxes `g`, `H`, and corner scalars `c`.
@@ -145,7 +144,7 @@ pub struct Witness3D {
     pub c_corners: Vec<i64>,
 }
 
-/// A self-contained, zero-trust verifiable 3D `Nooterra` certificate.
+/// Complete 3D simplicial certificate pairing a specification with its dual flux witness.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SimplicialCert3D {
     pub spec: Spec3D,

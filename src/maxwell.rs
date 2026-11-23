@@ -1,19 +1,14 @@
-//! Zero-Trust 3D Heterogeneous Maxwell Magnetostatics (`M5`) + Coupled Joule-Thermal (`M5 -> M3`)
-//! Proof Checker (`#![no_std]`, `#![forbid(unsafe_code)]`, 100% PURE EXACT INTEGER — ZERO FLOATS!).
+//! Pure-integer 3D heterogeneous Maxwell magnetostatics (`M5`) and coupled Joule-thermal
+//! (`M5 -> M3`) certificate verifier.
 //!
-//! Uses the exact 3D discrete De Rham complex on hexahedral grids (`ND_0 --curl--> RT_0 --div--> Q_0`):
-//! - **Dual Magnetic Field `H in ND_0` (`H(curl)` edge elements):**
-//!   Independently checks exact pointwise Ampère's Law `curl(H) === J` (`0/1` integer on every face!)
-//!   and computes exact closed-form complementary magnetic energy `2 W_upper(mu) = int_Omega mu |H|^2 dV`
-//!   across EVERY corner of the permeability uncertainty polytope `mu_e in [mu_min, mu_max]`.
-//! - **Primal Vector Potential `A in ND_0` (`A x n = 0` on boundary):**
-//!   Independently checks `A x n === 0`, computes exact `B = curl(A) in RT_0` (`div(B) === 0`),
-//!   and evaluates exact continuum lower bound `2 W_lower(mu) = 2 int J . A - int |B|^2 / mu dV`.
-//! - **Coupled Multiphysics (`verify_coupled_em_thermal`):**
-//!   Cryptographically couples `M5` Maxwell coil currents `J` into `M3` 3D Conjugate Heat Transfer
-//!   by independently verifying `Q_e_thermal >= (1 / (sigma_e * V_e)) * int_e |J|^2 dV` in exact `BigRat`!
-//! - **Actuator Virtual-Work Reluctance Torque (`verify_reluctance_torque_bracket`):**
-//!   Certifies a two-sided zero-discretization-error continuum torque bracket from two rotor positions!
+//! Operates on the 3D discrete De Rham complex (`ND_0 --curl--> RT_0 --div--> Q_0`):
+//! - Dual magnetic field `H in ND_0`: verifies pointwise Ampere conservation `curl(H) == J`
+//!   and evaluates `2 W_upper(mu) = int_Omega mu |H|^2 dV` across permeability corners.
+//! - Primal vector potential `A in ND_0`: verifies `A x n == 0` on the boundary, computes
+//!   `B = curl(A) in RT_0`, and evaluates `2 W_lower(mu) = 2 int J . A - int |B|^2 / mu dV`.
+//! - Coupled Joule-thermal (`verify_coupled_em_thermal`): verifies `Q_e_thermal >= (1 / (sigma_e * V_e)) * int_e |J|^2 dV`.
+//! - Reluctance torque (`verify_reluctance_torque_bracket`): certifies a two-sided continuum
+//!   torque bracket from two rotor positions.
 
 use alloc::vec::Vec;
 
@@ -134,7 +129,7 @@ pub enum MaxwellRejection {
 pub struct MaxwellDualReport {
     pub spec_hash: [u8; 32],
     pub num_cells: usize,
-    /// Exact rational upper bound `2 * W_mag(mc) = int_Omega mu_mc |H|^2 dV` per permeability corner!
+    /// Exact rational upper bound `2 * W_mag(mc) = int_Omega mu_mc |H|^2 dV` per permeability corner.
     pub energy2_upper_per_corner: Vec<BigRat>,
     pub worst_energy2_upper: BigRat,
 }
@@ -143,7 +138,7 @@ pub struct MaxwellDualReport {
 pub struct MaxwellPrimalReport {
     pub spec_hash: [u8; 32],
     pub num_cells: usize,
-    /// Exact rational lower bound `2 * W_mag(mc) = 2 int J . A - int |curl A|^2 / mu_mc dV` per corner!
+    /// Exact rational lower bound `2 * W_mag(mc) = 2 int J . A - int |curl A|^2 / mu_mc dV` per corner.
     pub energy2_lower_per_corner: Vec<BigRat>,
 }
 
@@ -250,18 +245,16 @@ fn rt0_axis_sq_big(a: &BigInt, b: &BigInt) -> BigUint {
     t.mag
 }
 
-/// Zero-Trust Pure-Integer 3D Nédélec (`ND_0`) Dual Magnetostatics Verifier!
-/// Independently verifies exact pointwise Ampère's Law `curl(H) === J` (`0/1` exact on EVERY face!)
-/// and computes exact closed-form rational `2 * W_upper(mu) = int_Omega mu |H|^2 dV` across ALL
-/// permeability uncertainty corners!
+/// Pure-integer 3D Nedelec (`ND_0`) dual magnetostatics verifier.
+/// Checks pointwise `curl(H) == J` on every face and computes exact rational
+/// `2 * W_upper(mu) = int_Omega mu |H|^2 dV` across all permeability corners.
 pub fn verify_maxwell_dual_cert(cert: &MaxwellDualCert3D) -> Result<MaxwellDualReport, MaxwellRejection> {
     let (rep, _) = verify_maxwell_dual_axes(cert, None)?;
     Ok(rep)
 }
 
-/// Zero-Trust 3D Nédélec (`ND_0`) Dual Verifier OVER A CONTINUOUS 3D GD&T TOLERANCE BOX!
-/// Uses exact covariant curl pullback (`H_i = H_hat_i / alpha_i`, invariant Ampere-turns `I`)
-/// and coordinate-wise convexity across all 8 box corners!
+/// 3D Nedelec (`ND_0`) dual verifier over a continuous 3D GD&T tolerance box using covariant
+/// curl pullback (`H_i = H_hat_i / alpha_i`) and 8-corner coordinate-wise convexity.
 pub fn verify_maxwell_dual_cert_gdt(
     cert: &MaxwellDualCert3D,
     gdt_box: &GdtScaleBox3D,
@@ -314,10 +307,8 @@ fn verify_maxwell_dual_axes(
     let g_jden = BigInt::from_i128((s.grid_den as i128) * (s.j_den as i128));
     let fden = BigInt::from_i128(w.field_den as i128);
 
-    // 1. Exact pointwise Ampère's Law curl(H) === J on ALL x-faces, y-faces, and z-faces!
-    // x-face: (Hz(i,j+1,k) - Hz(i,j,k))/dy - (Hy(i,j,k+1) - Hy(i,j,k))/dz == Jx(i,j,k)
-    // Multiply by dy * dz * field_den * j_den:
-    //   g * j_den * [dz*(Hz1 - Hz0) - dy*(Hy1 - Hy0)] == dyz * field_den * Jx
+    // Pointwise Ampere conservation curl(H) == J scaled to integers:
+    //   g * j_den * [dz*(Hz1 - Hz0) - dy*(Hy1 - Hy0)] == dyz * field_den * Jx.
     let rhs_x_scale = dyz.mul(&fden);
     for i in 0..=nx {
         for j in 0..ny {
@@ -456,16 +447,15 @@ fn verify_maxwell_dual_axes(
     ))
 }
 
-/// Zero-Trust Pure-Integer 3D Nédélec (`ND_0`) Primal Magnetostatics Verifier!
-/// Independently checks exact tangential Dirichlet BC `A x n === 0` on all 6 faces of `dOmega`,
-/// computes exact `B = curl(A) in RT_0`, and certifies exact continuum lower bound
-/// `2 * W_lower(mu) = 2 int J . A - int |B|^2 / mu dV <= 2 * W_exact(mu)` across ALL corners!
+/// Pure-integer 3D Nedelec (`ND_0`) primal magnetostatics verifier.
+/// Checks tangential `A x n == 0` on all boundary faces, computes `B = curl(A) in RT_0`, and
+/// evaluates `2 * W_lower(mu) = 2 int J . A - int |B|^2 / mu dV <= 2 * W_exact(mu)`.
 pub fn verify_maxwell_primal_cert(cert: &MaxwellPrimalCert3D) -> Result<MaxwellPrimalReport, MaxwellRejection> {
     let (rep, _, _) = verify_maxwell_primal_axes(cert, None)?;
     Ok(rep)
 }
 
-/// Zero-Trust 3D Nédélec (`ND_0`) Primal Verifier OVER A CONTINUOUS 3D GD&T TOLERANCE BOX!
+/// 3D Nedelec (`ND_0`) primal verifier over a continuous 3D GD&T tolerance box.
 pub fn verify_maxwell_primal_cert_gdt(
     cert: &MaxwellPrimalCert3D,
     gdt_box: &GdtScaleBox3D,
@@ -488,8 +478,6 @@ fn verify_maxwell_primal_axes(
 
     let (nx, ny, nz) = (s.nx, s.ny, s.nz);
 
-    // 1. Verify exact tangential boundary condition A x n === 0 on all 6 boundary sides!
-    // x-edges lying on y=0, y=ny, z=0, z=nz must be 0!
     for i in 0..nx {
         for j in 0..=ny {
             for k in 0..=nz {
@@ -499,7 +487,6 @@ fn verify_maxwell_primal_axes(
             }
         }
     }
-    // y-edges lying on x=0, x=nx, z=0, z=nz must be 0!
     for i in 0..=nx {
         for j in 0..ny {
             for k in 0..=nz {
@@ -509,7 +496,6 @@ fn verify_maxwell_primal_axes(
             }
         }
     }
-    // z-edges lying on x=0, x=nx, y=0, y=ny must be 0!
     for i in 0..=nx {
         for j in 0..=ny {
             for k in 0..nz {
@@ -520,12 +506,7 @@ fn verify_maxwell_primal_axes(
         }
     }
 
-    // 2. Compute exact scaled B = curl(A) on every face:
-    //    B_scaled = B * (dxyz * field_den / grid_den)  =>  B = B_scaled * grid_den / (dxyz * field_den)!
-    //    Check:
-    //      B_x = g/(dy*dz*fd) * [dz*(Az1-Az0) - dy*(Ay1-Ay0)] -> multiply by dx => dx*dz*(Az1-Az0) - dx*dy*(Ay1-Ay0)!
-    //      B_y = g/(dx*dz*fd) * [dx*(Ax1-Ax0) - dz*(Az1-Az0)] -> multiply by dy => dy*dx*(Ax1-Ax0) - dy*dz*(Az1-Az0)!
-    //      B_z = g/(dx*dy*fd) * [dy*(Ay1-Ay0) - dx*(Ax1-Ax0)] -> multiply by dz => dz*dy*(Ay1-Ay0) - dz*dx*(Ax1-Ax0)!
+    // Scaled face curl: B_scaled = B * (dxyz * field_den / grid_den).
     let dx = BigInt::from_i128(s.dx_num as i128);
     let dy = BigInt::from_i128(s.dy_num as i128);
     let dz = BigInt::from_i128(s.dz_num as i128);
@@ -626,7 +607,6 @@ fn verify_maxwell_primal_axes(
     let mut energy2_lower_per_corner = Vec::with_capacity(s.material_corners.len());
     let mut b_axes_per_corner: Vec<[BigRat; 3]> = Vec::with_capacity(s.material_corners.len());
     for mc in &s.material_corners {
-        // Group by distinct mu_num per axis for fast exact BigRat evaluation!
         let mut distinct_mu: Vec<(i64, [BigUint; 3])> = Vec::new();
         for cid in 0..n_cells {
             let mn = mc.mu_num[cid];
@@ -679,13 +659,9 @@ fn verify_maxwell_primal_axes(
     ))
 }
 
-/// Zero-Trust Cryptographically Coupled Multiphysics Verifier (`M5 Maxwell -> M3 Thermal CHT`):
-/// 1. Independently verifies BOTH the 3D Maxwell Dual certificate (`curl(H) === J`) AND the
-///    3D Thermal CHT Dual certificate (`div(q) === Q`).
-/// 2. Checks identical 3D geometry.
-/// 3. Independently computes the exact cell-averaged I^2 R Joule heating density
-///    `Q_Joule(e) = (1 / (sigma_e * V_e)) * int_e |J|^2 dV` from the verified `RT_0` coil current `J`,
-///    and verifies `Q_thermal(e) >= Q_Joule(e)` in exact `BigRat` on EVERY cell!
+/// Coupled multiphysics verifier (`M5 -> M3`): verifies both the 3D Maxwell dual certificate
+/// and the 3D thermal dual certificate on identical geometry, and checks that every cell's
+/// thermal source `Q_thermal(e)` bounds the `RT_0` Joule density `(1 / (sigma_e * V_e)) * int_e |J|^2 dV`.
 pub fn verify_coupled_em_thermal(
     em_cert: &MaxwellDualCert3D,
     th_cert: &ThermalDualCert3D,
@@ -781,11 +757,9 @@ pub fn verify_coupled_em_thermal(
     })
 }
 
-/// Zero-Trust Cryptographically Coupled Multiphysics Verifier (`M5 Maxwell -> M3 Thermal CHT`)
-/// OVER A CONTINUOUS 3D GD&T TOLERANCE BOX!
-/// Independently verifies `M5` dual + `M3` dual over all 8 GD&T box corners AND checks that every
-/// cell's thermal source `Q_th` dominates the worst-case Piola-scaled wire resistance heating
-/// `max_{alpha in GD&T} [ (ax/(ay*az)) Q_x + (ay/(ax*az)) Q_y + (az/(ax*ay)) Q_z ]`!
+/// Coupled multiphysics verifier (`M5 -> M3`) over a continuous 3D GD&T tolerance box.
+/// Checks both `M5` and `M3` dual certificates over all 8 GD&T corners and verifies that each
+/// cell's thermal source dominates worst-case Piola-scaled wire-resistance heating.
 pub fn verify_coupled_em_thermal_gdt(
     em_cert: &MaxwellDualCert3D,
     th_cert: &ThermalDualCert3D,
@@ -865,7 +839,6 @@ pub fn verify_coupled_em_thermal_gdt(
                     BigRat::new(BigInt { neg: false, mag: ay_u }.mul(&sden_i), cell_den.clone()),
                     BigRat::new(BigInt { neg: false, mag: az_u }.mul(&sden_i), cell_den),
                 ];
-                // Worst-case exact Piola wire-resistance Joule heating over all 8 GD&T corners!
                 let mut q_joule_max = BigRat::zero();
                 for &(ax, ay, az) in &corners {
                     let v = eval_rt0_piola_corner(&q_axes, gdt_box, ax, ay, az);
@@ -891,10 +864,9 @@ pub fn verify_coupled_em_thermal_gdt(
     })
 }
 
-/// Zero-Trust Continuum Reluctance Torque Bracket Certifier!
-/// Independently verifies Primal (`A`) and Dual (`H`) 3D Maxwell certificates at two rotor angles
-/// `theta_1` and `theta_2 = theta_1 + dtheta`, returning an exact zero-discretization-error
-/// two-sided bracket on average reluctance torque `(W(theta_2) - W(theta_1)) / dtheta`!
+/// Verifies primal (`A`) and dual (`H`) 3D Maxwell certificates at two rotor angles `theta_1`
+/// and `theta_2 = theta_1 + dtheta`, returning a two-sided continuum bracket on average
+/// reluctance torque `(W(theta_2) - W(theta_1)) / dtheta`.
 pub fn verify_reluctance_torque_bracket(
     primal_1: &MaxwellPrimalCert3D,
     dual_1: &MaxwellDualCert3D,
@@ -916,11 +888,11 @@ pub fn verify_reluctance_torque_bracket(
     )
 }
 
-/// Zero-Trust Continuum Reluctance Torque Bracket OVER A CONTINUOUS 3D GD&T TOLERANCE BOX!
-/// Uses exact correlated 8-corner coordinate-wise convexity (since one manufactured actuator has
-/// the same physical geometry `(alpha_x, alpha_y, alpha_z)` at both rotor angles `theta_1, theta_2`):
+/// Continuum reluctance torque bracket over a continuous 3D GD&T tolerance box using correlated
+/// 8-corner coordinate-wise convexity (one manufactured part shares `(alpha_x, alpha_y, alpha_z)`
+/// across both rotor angles):
 ///   `2 * DeltaW_min = work2_2 - max_{c in {-,+}^3} [ M_2(c) + E_1(c) ]`
-///   `2 * DeltaW_max = max_{c in {-,+}^3} [ E_2(c) + M_1(c) ] - work2_1`!
+///   `2 * DeltaW_max = max_{c in {-,+}^3} [ E_2(c) + M_1(c) ] - work2_1`.
 #[allow(clippy::too_many_arguments)]
 pub fn verify_reluctance_torque_bracket_gdt(
     primal_1: &MaxwellPrimalCert3D,
@@ -955,7 +927,7 @@ pub fn verify_reluctance_torque_bracket_gdt(
     let w2_lower = rp2.energy2_lower_per_corner[corner_idx].mul(&half);
     let w2_upper = rd2.energy2_upper_per_corner[corner_idx].mul(&half);
 
-    // Correlated 8-corner global min/max of DeltaW(alpha) across the continuous GD&T tolerance box!
+    // Correlated 8-corner min/max of DeltaW(alpha) over the GD&T box.
     let mut max_m2_plus_e1: Option<BigRat> = None;
     let mut max_e2_plus_m1: Option<BigRat> = None;
     for (ax, ay, az) in gdt_box.corners() {
